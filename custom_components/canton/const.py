@@ -1,0 +1,299 @@
+"""Constants for the Canton Smart Sound integration."""
+
+from homeassistant.const import Platform
+
+DOMAIN = "canton"
+PLATFORMS = [
+    Platform.MEDIA_PLAYER,
+    Platform.SELECT,
+    Platform.NUMBER,
+    Platform.SWITCH,
+    Platform.SENSOR,
+    Platform.BUTTON,
+]
+
+# Network
+DEFAULT_LUCI_PORT = 7777
+LSSDP_MULTICAST_ADDR = "239.255.255.250"
+LSSDP_PORT = 1800
+LSSDP_ST = "urn:schemas-upnp-org:device:DDMSServer:1"
+
+# Timing
+KEEPALIVE_INTERVAL = 30
+RECONNECT_DELAYS = [5, 10, 30, 60]
+COMMAND_TIMEOUT = 5
+DISCOVERY_TIMEOUT = 5
+
+# LUCI header
+HEADER_SIZE = 10
+
+# LUCI command types
+CMD_GET = 1
+CMD_SET = 2
+
+# LUCI command status
+STATUS_INVALID = 0
+STATUS_SUCCESS = 1
+STATUS_ERROR = 2
+STATUS_NOT_READY = 3
+
+# Message Box IDs (MIDs)
+MID_NOT_REGISTER = 0
+MID_REGISTER = 3
+MID_DEREGISTER = 4
+MID_FIRMWARE_VERSION = 5
+MID_HOST_VERSION = 6
+MID_HOST_PRESENT = 9
+MID_NEW_SOURCE = 10
+MID_DEVICE_ATTACHMENT_STATUS = 38
+MID_PLAY_CONTROL = 40
+MID_BROWSE_CONTROL = 41
+MID_GET_UI = 42
+MID_APP_PLAYLIST = 43
+MID_CURRENT_UI = 45
+MID_PLAY_ELAPSED = 49
+MID_CURRENT_SOURCE = 50
+MID_CURRENT_PLAY_STATUS = 51
+MID_PLAYBACK_EVENT = 54
+MID_REBOOT_FROM_APP = 55
+MID_VOLUME = 64
+MID_FIRMWARE_UPGRADE_REQUEST = 65
+MID_DEVICE_UPDATE = 66
+MID_FAV = 70
+MID_HAMAP3ORP5EQ = 82
+MID_DEVICE_NAME = 90
+MID_DEVICE_MAC = 91
+MID_AUX_START = 95
+MID_AUX_STOP = 96
+MID_DDMS_TRIGGER = 100
+MID_SA_MODE = 101
+MID_LS_MODULE_SEARCH = 102
+MID_DDMS_QUERY = 103
+MID_DDMS_ZONE_ID = 104
+MID_DDMS_SSID = 105
+MID_SPEAKER_TYPE_SET = 106
+MID_SCENE_NAME = 107
+MID_TUNNELING_START = 111
+MID_RE_BOOT_REQUEST = 114
+MID_REBOOT = 115
+MID_NETWORK_STATUS = 124
+MID_NETWORK_CONFIGURE = 125
+MID_CONFIGURE = 142
+MID_EQ_PRESET = 145
+MID_RSSI_INDICATOR = 151
+MID_IOT_CONTROL = 207
+MID_ENV_ITEM = 208
+MID_BLUETOOTH = 209
+MID_SDDP_NOTIFIER = 212
+MID_SOURCE_CONTROL = 213
+MID_SPOTIFY_SLAVE_INFO = 216
+MID_ZONE_VOLUME = 219
+MID_DEVICE_DOWNLOAD = 223
+MID_GCAST_SERIAL_NUMBER = 231
+MID_ALEXA_CLOSE_ALARM = 233
+MID_ALEXA_COMMAND = 234
+
+# Play status
+PLAY_STATUS_PLAYING = 0
+PLAY_STATUS_STOPPED = 1
+PLAY_STATUS_PAUSED = 2
+PLAY_STATUS_CONNECTING = 3
+PLAY_STATUS_RECEIVING = 4
+PLAY_STATUS_BUFFERING = 5
+
+# Play sources
+SOURCE_NONE = 0
+SOURCE_AIRPLAY = 1
+SOURCE_DMR = 2
+SOURCE_DMP = 3
+SOURCE_SPOTIFY = 4
+SOURCE_USB = 5
+SOURCE_SDCARD = 6
+SOURCE_MELON = 7
+SOURCE_VTUNER = 8
+SOURCE_TUNEIN = 9
+SOURCE_MIRACAST = 10
+SOURCE_DDMS_SLAVE = 12
+SOURCE_LINE_IN = 14
+SOURCE_APPLE_USB = 16
+SOURCE_DIRECT_URL = 17
+SOURCE_QQMUSIC = 18
+SOURCE_BLUETOOTH = 19
+SOURCE_DEEZER = 21
+SOURCE_TIDAL = 22
+SOURCE_FAVORITES = 23
+SOURCE_GOOGLE_CAST = 24
+SOURCE_EXTERNAL = 25
+SOURCE_ROON_LABS = 27
+SOURCE_ALEXA = 28
+SOURCE_ROON = 29
+SOURCE_AIRABLE = 30
+
+SOURCE_MAP: dict[int, str] = {
+    SOURCE_NONE: "None",
+    SOURCE_AIRPLAY: "AirPlay",
+    SOURCE_DMR: "DMR",
+    SOURCE_DMP: "DMP",
+    SOURCE_SPOTIFY: "Spotify",
+    SOURCE_USB: "USB",
+    SOURCE_SDCARD: "SD Card",
+    SOURCE_MELON: "Melon",
+    SOURCE_VTUNER: "vTuner",
+    SOURCE_TUNEIN: "TuneIn",
+    SOURCE_MIRACAST: "Miracast",
+    SOURCE_DDMS_SLAVE: "Multiroom",
+    SOURCE_LINE_IN: "Line In",
+    SOURCE_APPLE_USB: "Apple USB",
+    SOURCE_DIRECT_URL: "URL",
+    SOURCE_QQMUSIC: "QQ Music",
+    SOURCE_BLUETOOTH: "Bluetooth",
+    SOURCE_DEEZER: "Deezer",
+    SOURCE_TIDAL: "TIDAL",
+    SOURCE_FAVORITES: "Favorites",
+    SOURCE_GOOGLE_CAST: "Google Cast",
+    SOURCE_EXTERNAL: "External",
+    SOURCE_ROON_LABS: "Roon Labs",
+    SOURCE_ALEXA: "Alexa",
+    SOURCE_ROON: "Roon",
+    SOURCE_AIRABLE: "Airable",
+}
+
+SOURCE_REVERSE_MAP: dict[str, int] = {v: k for k, v in SOURCE_MAP.items()}
+
+# Source capability bits (from SOURCE_LIST hex bitmap)
+SOURCE_CAPABILITY_BITS: dict[int, int] = {
+    0: SOURCE_AIRPLAY,
+    1: SOURCE_DMR,
+    2: SOURCE_DMP,
+    3: SOURCE_SPOTIFY,
+    4: SOURCE_USB,
+    5: SOURCE_SDCARD,
+    6: SOURCE_MELON,
+    7: SOURCE_VTUNER,
+    8: SOURCE_TUNEIN,
+    9: SOURCE_MIRACAST,
+    12: SOURCE_DDMS_SLAVE,
+    14: SOURCE_LINE_IN,
+    15: SOURCE_APPLE_USB,
+    16: SOURCE_DIRECT_URL,
+    17: SOURCE_QQMUSIC,
+    18: SOURCE_BLUETOOTH,
+    20: SOURCE_DEEZER,
+    21: SOURCE_TIDAL,
+    22: SOURCE_FAVORITES,
+    23: SOURCE_GOOGLE_CAST,
+    24: SOURCE_EXTERNAL,
+    26: SOURCE_ROON_LABS,
+    27: SOURCE_ALEXA,
+    28: SOURCE_ROON,
+    29: SOURCE_AIRABLE,
+}
+
+# Volume
+VOLUME_MIN = 0
+VOLUME_MAX = 99
+
+# Dispatcher signals
+SIGNAL_STATE_UPDATED = f"{DOMAIN}_state_updated_{{mac}}"
+SIGNAL_CONNECTION_CHANGED = f"{DOMAIN}_connection_{{mac}}"
+
+# Config keys
+CONF_HOST = "host"
+CONF_PORT = "port"
+CONF_MAC = "mac"
+CONF_DEVICE_NAME = "device_name"
+CONF_MODEL = "model"
+CONF_FW_VERSION = "fw_version"
+CONF_TUNNEL_PORT = "tunnel_port"
+CONF_SOURCE_LIST_MODE = "source_list_mode"
+DEFAULT_TUNNEL_PORT = 50006
+SOURCE_MODE_INPUTS = "inputs"
+SOURCE_MODE_PRESETS = "presets"
+
+# Tunnel command IDs (cmd0, cmd1)
+# cmd1: 1=SET/response, 2=GET, 3=ENTER, 4=EXIT
+TCMD_SOURCE_INFO = (2, 2)
+TCMD_SOURCE_SET = (3, 1)
+TCMD_SOURCE_GET = (3, 2)
+TCMD_EQ_SET = (4, 1)
+TCMD_EQ_GET = (4, 2)
+TCMD_STANDBY_SET = (6, 1)
+TCMD_STANDBY_GET = (6, 2)
+TCMD_PRESET_SET = (7, 3)
+TCMD_PRESET_GET = (7, 2)
+TCMD_MUTE_SET = (9, 1)
+TCMD_MUTE_GET = (9, 2)
+TCMD_BT_PAIR = (10, 1)
+TCMD_PLAY_MODE_GET = (11, 2)
+TCMD_VOLUME_SET = (12, 1)
+TCMD_VOLUME_GET = (12, 2)
+
+# Tunnel input name IDs (nameId in SOURCE_SET payload)
+TUNNEL_INPUT_NAMES: dict[int, str] = {
+    2: "TV",
+    3: "BDP",
+    4: "SAT",
+    5: "CD",
+    6: "DVD",
+    14: "PS",
+    18: "AUX",
+    19: "NET",
+    20: "BT",
+}
+TUNNEL_INPUT_NAMES_REVERSE: dict[str, int] = {v: k for k, v in TUNNEL_INPUT_NAMES.items()}
+
+# Tunnel play mode IDs
+TUNNEL_PLAY_MODES: dict[int, str] = {
+    1: "Stereo",
+    2: "Movie",
+    3: "Music",
+    4: "Night",
+    5: "Party",
+    6: "Discrete",
+    7: "Pure",
+    8: "Movie",
+}
+# Reverse map: use lowest ID for duplicates (Movie→2, not Movie→8)
+TUNNEL_PLAY_MODES_REVERSE: dict[str, int] = {}
+for _id in sorted(TUNNEL_PLAY_MODES):
+    _name = TUNNEL_PLAY_MODES[_id]
+    if _name not in TUNNEL_PLAY_MODES_REVERSE:
+        TUNNEL_PLAY_MODES_REVERSE[_name] = _id
+
+# Tunnel physical source IDs (sourceId in SOURCE_SET payload)
+TUNNEL_PHYSICAL_SOURCES: dict[int, str] = {
+    1: "HDMI 1", 2: "HDMI 2", 3: "HDMI 3", 4: "HDMI 4", 5: "HDMI 5",
+    6: "HDMI TV", 7: "OPT 1", 8: "OPT 2", 9: "OPT 3", 10: "OPT 4",
+    11: "COAX 1", 12: "COAX 2", 15: "AUX 1", 16: "AUX 2",
+    20: "USB", 21: "BT", 22: "WIRELESS", 23: "NET",
+}
+
+# Menu IDs for OSD settings (accessed via MENU_GET/SET tunnel cmd 5)
+MENU_SLEEP_TIMER = 33
+MENU_MAX_VOLUME = 41
+MENU_SUBWOOFER_LEVEL = 281
+MENU_DRC = 19
+MENU_CEC = 35
+MENU_STANDBY_MODE = 36
+MENU_TOUCH_PANEL = 44
+MENU_LED_FLASHING = 674
+MENU_INPUT_STREAM_DISPLAY = 675
+MENU_SLAVE_DISPLAY = 676
+
+SLEEP_TIMER_OPTIONS: dict[int, str] = {
+    0: "15 Min",
+    1: "30 Min",
+    2: "45 Min",
+    3: "60 Min",
+    4: "Off",
+}
+SLEEP_TIMER_REVERSE: dict[str, int] = {v: k for k, v in SLEEP_TIMER_OPTIONS.items()}
+
+STANDBY_MODE_OPTIONS: dict[int, str] = {
+    0: "ECO",
+    1: "Network",
+    2: "Signal",
+    3: "Manual",
+}
+STANDBY_MODE_REVERSE: dict[str, int] = {v: k for k, v in STANDBY_MODE_OPTIONS.items()}
+

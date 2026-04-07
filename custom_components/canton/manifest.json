@@ -1,0 +1,12 @@
+{
+  "domain": "canton",
+  "name": "Canton Smart Sound",
+  "codeowners": ["@thecodingdad"],
+  "config_flow": true,
+  "documentation": "https://github.com/thecodingdad/ha-canton",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/thecodingdad/ha-canton/issues",
+  "requirements": ["PyChromecast==14.0.10"],
+  "version": "1.0.0"
+}

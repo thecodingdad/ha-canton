@@ -1,0 +1,44 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Canton Smart Sound",
+        "menu_options": {
+          "scan": "Netzwerk nach Geräten durchsuchen",
+          "manual": "Gerät manuell eingeben"
+        }
+      },
+      "scan": {
+        "title": "Gerät auswählen",
+        "data": {
+          "device": "Gerät"
+        }
+      },
+      "manual": {
+        "title": "Manuelle Konfiguration",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung zum Gerät fehlgeschlagen"
+    },
+    "abort": {
+      "already_configured": "Gerät ist bereits konfiguriert",
+      "no_devices_found": "Keine Canton-Geräte im Netzwerk gefunden",
+      "device_not_found": "Ausgewähltes Gerät ist nicht mehr verfügbar"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Canton Smart Sound Einstellungen",
+        "data": {
+          "source_list_mode": "Quellenliste"
+        }
+      }
+    }
+  }
+}
