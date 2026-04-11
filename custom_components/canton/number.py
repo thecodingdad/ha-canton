@@ -9,8 +9,20 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import CantonHub
-from .const import MENU_MAX_VOLUME, MENU_SUBWOOFER_LEVEL, SIGNAL_STATE_UPDATED
+from .const import (
+    MENU_LIP_SYNC,
+    MENU_MAX_VOLUME,
+    MENU_SUBWOOFER_LEVEL,
+    SIGNAL_STATE_UPDATED,
+)
 from .entity import CantonEntity
+
+# (setting_name, label, icon, min, max, unit)
+_NUMBER_DEFINITIONS = [
+    (MENU_MAX_VOLUME, "Max Volume", "mdi:volume-off", 0, 70, ""),
+    (MENU_SUBWOOFER_LEVEL, "Subwoofer Level", "mdi:speaker", -10, 10, "dB"),
+    (MENU_LIP_SYNC, "Lip Sync", "mdi:television-speaker", 0, 200, "ms"),
+]
 
 
 async def async_setup_entry(
@@ -18,16 +30,20 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Canton EQ number entities."""
+    """Set up Canton number entities."""
     hub: CantonHub = entry.runtime_data
-    async_add_entities([
+    entities: list = [
         CantonVolumeNumber(hub),
         CantonEQNumber(hub, "bass", "EQ Bass"),
         CantonEQNumber(hub, "mid", "EQ Mid"),
         CantonEQNumber(hub, "treble", "EQ Treble"),
-        CantonMenuNumber(hub, "max_volume", "Max Volume", "mdi:volume-off", MENU_MAX_VOLUME, 0, 70, ""),
-        CantonMenuNumber(hub, "subwoofer_level", "Subwoofer Level", "mdi:speaker", MENU_SUBWOOFER_LEVEL, -10, 10, "dB"),
-    ])
+    ]
+    for name, label, icon, min_val, max_val, unit in _NUMBER_DEFINITIONS:
+        if hub.menu_id(name) is not None:
+            entities.append(
+                CantonMenuNumber(hub, name, label, icon, min_val, max_val, unit)
+            )
+    async_add_entities(entities)
 
 
 class CantonVolumeNumber(CantonEntity, NumberEntity):
@@ -78,18 +94,17 @@ class CantonMenuNumber(CantonEntity, NumberEntity):
     def __init__(
         self,
         hub: CantonHub,
-        key: str,
-        name: str,
+        setting_name: str,
+        label: str,
         icon: str,
-        menu_id: int,
         min_val: int,
         max_val: int,
         unit: str,
     ) -> None:
         super().__init__(hub)
-        self._menu_id = menu_id
-        self._attr_unique_id = f"{hub.usn}_{key}"
-        self._attr_name = name
+        self._setting_name = setting_name
+        self._attr_unique_id = f"{hub.usn}_{setting_name}"
+        self._attr_name = label
         self._attr_icon = icon
         self._attr_native_min_value = min_val
         self._attr_native_max_value = max_val
@@ -97,11 +112,10 @@ class CantonMenuNumber(CantonEntity, NumberEntity):
 
     @property
     def native_value(self) -> float | None:
-        val = self._hub.state.menu_values.get(self._menu_id)
-        return val if val is not None else None
+        return self._hub.menu_value(self._setting_name)
 
     async def async_set_native_value(self, value: float) -> None:
-        await self._hub.async_menu_set(self._menu_id, int(value))
+        await self._hub.async_menu_set(self._setting_name, int(value))
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()

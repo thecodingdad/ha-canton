@@ -10,8 +10,17 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import CantonHub
 from .const import (
+    INPUT_SELECTION_OPTIONS,
+    INPUT_SELECTION_REVERSE,
+    MENU_INPUT_SELECTION,
+    MENU_RF_CHANNEL,
+    MENU_RF_POWER,
     MENU_SLEEP_TIMER,
     MENU_STANDBY_MODE,
+    RF_CHANNEL_OPTIONS,
+    RF_CHANNEL_REVERSE,
+    RF_POWER_OPTIONS,
+    RF_POWER_REVERSE,
     SIGNAL_STATE_UPDATED,
     SLEEP_TIMER_OPTIONS,
     SLEEP_TIMER_REVERSE,
@@ -22,6 +31,15 @@ from .const import (
 )
 from .entity import CantonEntity
 
+# (setting_name, label, icon, options_map, reverse_map)
+_SELECT_DEFINITIONS = [
+    (MENU_SLEEP_TIMER, "Sleep Timer", "mdi:timer-sand", SLEEP_TIMER_OPTIONS, SLEEP_TIMER_REVERSE),
+    (MENU_STANDBY_MODE, "Standby Mode", "mdi:power-sleep", STANDBY_MODE_OPTIONS, STANDBY_MODE_REVERSE),
+    (MENU_INPUT_SELECTION, "Input Selection", "mdi:import", INPUT_SELECTION_OPTIONS, INPUT_SELECTION_REVERSE),
+    (MENU_RF_POWER, "RF Power", "mdi:wifi-strength-4", RF_POWER_OPTIONS, RF_POWER_REVERSE),
+    (MENU_RF_CHANNEL, "RF Channel", "mdi:wifi", RF_CHANNEL_OPTIONS, RF_CHANNEL_REVERSE),
+]
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -30,13 +48,17 @@ async def async_setup_entry(
 ) -> None:
     """Set up Canton select entities."""
     hub: CantonHub = entry.runtime_data
-    async_add_entities([
+    entities: list = [
         CantonInputSelect(hub),
         CantonPlayModeSelect(hub),
         CantonPresetSelect(hub),
-        CantonMenuSelect(hub, "sleep_timer", "Sleep Timer", "mdi:timer-sand", MENU_SLEEP_TIMER, SLEEP_TIMER_OPTIONS, SLEEP_TIMER_REVERSE),
-        CantonMenuSelect(hub, "standby_mode", "Standby Mode", "mdi:power-sleep", MENU_STANDBY_MODE, STANDBY_MODE_OPTIONS, STANDBY_MODE_REVERSE),
-    ])
+    ]
+    for name, label, icon, options, reverse in _SELECT_DEFINITIONS:
+        if hub.menu_id(name) is not None:
+            entities.append(
+                CantonMenuSelect(hub, name, label, icon, options, reverse)
+            )
+    async_add_entities(entities)
 
 
 class CantonInputSelect(CantonEntity, SelectEntity):
@@ -107,25 +129,24 @@ class CantonMenuSelect(CantonEntity, SelectEntity):
     def __init__(
         self,
         hub: CantonHub,
-        key: str,
-        name: str,
+        setting_name: str,
+        label: str,
         icon: str,
-        menu_id: int,
         options_map: dict[int, str],
         reverse_map: dict[str, int],
     ) -> None:
         super().__init__(hub)
-        self._menu_id = menu_id
+        self._setting_name = setting_name
         self._options_map = options_map
         self._reverse_map = reverse_map
-        self._attr_unique_id = f"{hub.usn}_{key}"
-        self._attr_name = name
+        self._attr_unique_id = f"{hub.usn}_{setting_name}"
+        self._attr_name = label
         self._attr_icon = icon
         self._attr_options = list(options_map.values())
 
     @property
     def current_option(self) -> str | None:
-        val = self._hub.state.menu_values.get(self._menu_id)
+        val = self._hub.menu_value(self._setting_name)
         if val is not None:
             return self._options_map.get(val)
         return None
@@ -133,7 +154,7 @@ class CantonMenuSelect(CantonEntity, SelectEntity):
     async def async_select_option(self, option: str) -> None:
         val = self._reverse_map.get(option)
         if val is not None:
-            await self._hub.async_menu_set(self._menu_id, val)
+            await self._hub.async_menu_set(self._setting_name, val)
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()

@@ -16,9 +16,21 @@ from .const import (
     MENU_LED_FLASHING,
     MENU_SLAVE_DISPLAY,
     MENU_TOUCH_PANEL,
+    MENU_VOICE_CLARITY,
     SIGNAL_STATE_UPDATED,
 )
 from .entity import CantonEntity
+
+# (setting_name, label, icon, inverted)
+_SWITCH_DEFINITIONS = [
+    (MENU_CEC, "HDMI CEC", "mdi:hdmi-port", False),
+    (MENU_DRC, "Dynamic Range Compression", "mdi:tune-vertical", False),
+    (MENU_VOICE_CLARITY, "Voice Clarity", "mdi:account-voice", False),
+    (MENU_TOUCH_PANEL, "Touch Panel", "mdi:gesture-tap", True),
+    (MENU_LED_FLASHING, "LED Flashing", "mdi:led-on", False),
+    (MENU_INPUT_STREAM_DISPLAY, "Input Stream Display", "mdi:monitor", False),
+    (MENU_SLAVE_DISPLAY, "Slave Speaker Display", "mdi:monitor-multiple", False),
+]
 
 
 async def async_setup_entry(
@@ -28,15 +40,13 @@ async def async_setup_entry(
 ) -> None:
     """Set up Canton switch entities."""
     hub: CantonHub = entry.runtime_data
-    async_add_entities([
-        CantonMuteSwitch(hub),
-        CantonMenuSwitch(hub, "cec", "HDMI CEC", "mdi:hdmi-port", MENU_CEC),
-        CantonMenuSwitch(hub, "drc", "Dynamic Range Compression", "mdi:tune-vertical", MENU_DRC),
-        CantonMenuSwitch(hub, "touch_panel", "Touch Panel", "mdi:gesture-tap", MENU_TOUCH_PANEL, inverted=True),
-        CantonMenuSwitch(hub, "led_flashing", "LED Flashing", "mdi:led-on", MENU_LED_FLASHING),
-        CantonMenuSwitch(hub, "input_stream_display", "Input Stream Display", "mdi:monitor", MENU_INPUT_STREAM_DISPLAY),
-        CantonMenuSwitch(hub, "slave_display", "Slave Speaker Display", "mdi:monitor-multiple", MENU_SLAVE_DISPLAY),
-    ])
+    entities: list = [CantonMuteSwitch(hub)]
+    for name, label, icon, inverted in _SWITCH_DEFINITIONS:
+        if hub.menu_id(name) is not None:
+            entities.append(
+                CantonMenuSwitch(hub, name, label, icon, inverted=inverted)
+            )
+    async_add_entities(entities)
 
 
 class CantonMuteSwitch(CantonEntity, SwitchEntity):
@@ -80,22 +90,21 @@ class CantonMenuSwitch(CantonEntity, SwitchEntity):
     def __init__(
         self,
         hub: CantonHub,
-        key: str,
-        name: str,
+        setting_name: str,
+        label: str,
         icon: str,
-        menu_id: int,
         inverted: bool = False,
     ) -> None:
         super().__init__(hub)
-        self._menu_id = menu_id
+        self._setting_name = setting_name
         self._inverted = inverted
-        self._attr_unique_id = f"{hub.usn}_{key}"
-        self._attr_name = name
+        self._attr_unique_id = f"{hub.usn}_{setting_name}"
+        self._attr_name = label
         self._attr_icon = icon
 
     @property
     def is_on(self) -> bool | None:
-        val = self._hub.state.menu_values.get(self._menu_id)
+        val = self._hub.menu_value(self._setting_name)
         if val is None:
             return None
         # Most switches: 0=Off, 1=On
@@ -106,12 +115,12 @@ class CantonMenuSwitch(CantonEntity, SwitchEntity):
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._hub.async_menu_set(
-            self._menu_id, 0 if self._inverted else 1
+            self._setting_name, 0 if self._inverted else 1
         )
 
     async def async_turn_off(self, **kwargs) -> None:
         await self._hub.async_menu_set(
-            self._menu_id, 1 if self._inverted else 0
+            self._setting_name, 1 if self._inverted else 0
         )
 
     async def async_added_to_hass(self) -> None:

@@ -23,16 +23,9 @@ from .const import (
     CONF_TUNNEL_PORT,
     DEFAULT_TUNNEL_PORT,
     DOMAIN,
-    MENU_CEC,
-    MENU_DRC,
-    MENU_INPUT_STREAM_DISPLAY,
-    MENU_LED_FLASHING,
-    MENU_MAX_VOLUME,
-    MENU_SLEEP_TIMER,
-    MENU_SLAVE_DISPLAY,
-    MENU_STANDBY_MODE,
-    MENU_SUBWOOFER_LEVEL,
-    MENU_TOUCH_PANEL,
+    MENU_EXIT_COUNT,
+    MENU_EXIT_COUNT_DEFAULT,
+    MENU_IDS_BY_MODEL,
     MID_TUNNELING_START,
     MID_VOLUME,
     PLATFORMS,
@@ -292,13 +285,12 @@ class CantonHub:
         if resp is not None and len(resp) >= 1:
             self.state.is_muted = resp[0] == 1
 
-        # Query menu settings
-        for menu_id in (
-            MENU_SLEEP_TIMER, MENU_MAX_VOLUME, MENU_SUBWOOFER_LEVEL,
-            MENU_DRC, MENU_CEC, MENU_STANDBY_MODE, MENU_TOUCH_PANEL,
-            MENU_LED_FLASHING, MENU_INPUT_STREAM_DISPLAY, MENU_SLAVE_DISPLAY,
-        ):
-            val = await self.async_menu_get(menu_id)
+        # Query all menu settings supported by this model
+        for name in MENU_IDS_BY_MODEL:
+            menu_id = self.menu_id(name)
+            if menu_id is None:
+                continue
+            val = await self._async_menu_get_by_id(menu_id)
             if val is not None:
                 self.state.menu_values[menu_id] = val
 
@@ -619,8 +611,22 @@ class CantonHub:
 
     # --- Menu methods ---
 
-    async def async_menu_get(self, menu_id: int) -> int | None:
-        """Get a menu value by ID."""
+    def menu_id(self, name: str) -> int | None:
+        """Return the menu ID for a setting name on this device model.
+
+        Returns None if the setting is not supported on this model.
+        """
+        return MENU_IDS_BY_MODEL.get(name, {}).get(self.model)
+
+    def menu_value(self, name: str) -> int | None:
+        """Return the cached menu value for a setting name."""
+        menu_id = self.menu_id(name)
+        if menu_id is None:
+            return None
+        return self.state.menu_values.get(menu_id)
+
+    async def _async_menu_get_by_id(self, menu_id: int) -> int | None:
+        """Low-level: get a menu value by raw ID (used during initial fetch)."""
         if not self._tunnel:
             return None
         resp = await self._tunnel.async_send(
@@ -631,15 +637,23 @@ class CantonHub:
             return val if val < 128 else val - 256
         return None
 
-    async def async_menu_set(self, menu_id: int, value: int) -> None:
-        """Set a menu value by ID."""
-        if not self._tunnel:
+    async def async_menu_set(self, name: str, value: int) -> None:
+        """Set a menu value by setting name."""
+        menu_id = self.menu_id(name)
+        if menu_id is None or not self._tunnel:
             return
         await self._tunnel.async_send_fire(
             *TCMD_MENU_SET, menu_id.to_bytes(4, "big") + bytes([value & 0xFF])
         )
-        # Close OSD menu on the device display
-        await self._tunnel.async_send_fire(*TCMD_MENU_EXIT)
+        # Close OSD menu on the device display. The device auto-navigates
+        # into the menu hierarchy when MENU_SET is sent, so one EXIT only
+        # goes up one level — we need to send one EXIT per nesting level
+        # plus one to fully close the OSD. The device needs ~200ms between
+        # OSD commands to process them correctly.
+        exit_count = MENU_EXIT_COUNT.get(name, MENU_EXIT_COUNT_DEFAULT)
+        for _ in range(exit_count):
+            await asyncio.sleep(0.2)
+            await self._tunnel.async_send_fire(*TCMD_MENU_EXIT)
 
     # --- Command methods ---
 
@@ -807,11 +821,6 @@ class CantonHub:
 
 async def async_setup_entry(hass: HomeAssistant, entry: CantonConfigEntry) -> bool:
     """Set up Canton from a config entry."""
-    # Migrate stale tunnel_port from old default (2020) to new default (50006)
-    if entry.data.get(CONF_TUNNEL_PORT) == 2020:
-        new_data = {**entry.data, CONF_TUNNEL_PORT: DEFAULT_TUNNEL_PORT}
-        hass.config_entries.async_update_entry(entry, data=new_data)
-
     hub = CantonHub(
         hass=hass,
         host=entry.data[CONF_HOST],

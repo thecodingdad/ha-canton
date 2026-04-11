@@ -270,17 +270,184 @@ TUNNEL_PHYSICAL_SOURCES: dict[int, str] = {
     20: "USB", 21: "BT", 22: "WIRELESS", 23: "NET",
 }
 
-# Menu IDs for OSD settings (accessed via MENU_GET/SET tunnel cmd 5)
-MENU_SLEEP_TIMER = 33
-MENU_MAX_VOLUME = 41
-MENU_SUBWOOFER_LEVEL = 281
-MENU_DRC = 19
-MENU_CEC = 35
-MENU_STANDBY_MODE = 36
-MENU_TOUCH_PANEL = 44
-MENU_LED_FLASHING = 674
-MENU_INPUT_STREAM_DISPLAY = 675
-MENU_SLAVE_DISPLAY = 676
+# Canton device model names (as reported in the CAST_MODEL LSSDP header)
+MODEL_SOUNDBAR_10 = "Smart Soundbar 10"
+MODEL_SOUNDBAR_9 = "Smart Soundbar 9"
+MODEL_SOUNDDECK_100 = "Smart Sounddeck 100"
+MODEL_SOUNDBOX_3 = "Smart Soundbox 3"
+MODEL_CONNECT_51 = "Smart Connect 5.1"
+MODEL_AMP_51 = "Smart Amp 5.1"
+
+# OSD menu setting names (used as keys throughout the integration)
+MENU_DRC = "drc"
+MENU_VOICE_CLARITY = "voice_clarity"
+MENU_SLEEP_TIMER = "sleep_timer"
+MENU_CEC = "cec"
+MENU_STANDBY_MODE = "standby_mode"
+MENU_INPUT_SELECTION = "input_selection"
+MENU_LIP_SYNC = "lip_sync"
+MENU_MAX_VOLUME = "max_volume"
+MENU_TOUCH_PANEL = "touch_panel"
+MENU_LED_FLASHING = "led_flashing"
+MENU_INPUT_STREAM_DISPLAY = "input_stream_display"
+MENU_SLAVE_DISPLAY = "slave_display"
+MENU_RF_POWER = "rf_power"
+MENU_RF_CHANNEL = "rf_channel"
+MENU_SUBWOOFER_LEVEL = "subwoofer_level"
+
+# Per-model menu IDs accessed via MENU_GET/SET tunnel cmd 5.
+# None means the setting is not supported on that model.
+# Source: reverse-engineered from APK menu definitions per device model.
+MENU_IDS_BY_MODEL: dict[str, dict[str, int | None]] = {
+    MENU_DRC: {
+        MODEL_SOUNDBAR_10: 19,
+        MODEL_SOUNDBAR_9: 19,
+        MODEL_SOUNDDECK_100: 19,
+        MODEL_SOUNDBOX_3: None,
+        MODEL_CONNECT_51: 19,
+        MODEL_AMP_51: 19,
+    },
+    MENU_VOICE_CLARITY: {
+        MODEL_SOUNDBAR_10: 20,
+        MODEL_SOUNDBAR_9: 21,
+        MODEL_SOUNDDECK_100: 20,
+        MODEL_SOUNDBOX_3: 19,
+        MODEL_CONNECT_51: 20,
+        MODEL_AMP_51: 20,
+    },
+    MENU_SLEEP_TIMER: {
+        MODEL_SOUNDBAR_10: 33,
+        MODEL_SOUNDBAR_9: 33,
+        MODEL_SOUNDDECK_100: 33,
+        MODEL_SOUNDBOX_3: 33,
+        MODEL_CONNECT_51: 33,
+        MODEL_AMP_51: 33,
+    },
+    MENU_CEC: {
+        MODEL_SOUNDBAR_10: 35,
+        MODEL_SOUNDBAR_9: 35,
+        MODEL_SOUNDDECK_100: 35,
+        MODEL_SOUNDBOX_3: None,
+        MODEL_CONNECT_51: 35,
+        MODEL_AMP_51: 35,
+    },
+    MENU_STANDBY_MODE: {
+        MODEL_SOUNDBAR_10: 36,
+        MODEL_SOUNDBAR_9: 36,
+        MODEL_SOUNDDECK_100: 36,
+        MODEL_SOUNDBOX_3: 35,
+        MODEL_CONNECT_51: 36,
+        MODEL_AMP_51: 36,
+    },
+    MENU_INPUT_SELECTION: {
+        MODEL_SOUNDBAR_10: 38,
+        MODEL_SOUNDBAR_9: 38,
+        MODEL_SOUNDDECK_100: 38,
+        MODEL_SOUNDBOX_3: 36,
+        MODEL_CONNECT_51: None,
+        MODEL_AMP_51: None,
+    },
+    MENU_LIP_SYNC: {
+        MODEL_SOUNDBAR_10: 40,
+        MODEL_SOUNDBAR_9: 41,
+        MODEL_SOUNDDECK_100: 40,
+        MODEL_SOUNDBOX_3: None,
+        MODEL_CONNECT_51: None,
+        MODEL_AMP_51: None,
+    },
+    MENU_MAX_VOLUME: {
+        MODEL_SOUNDBAR_10: 41,
+        MODEL_SOUNDBAR_9: 42,
+        MODEL_SOUNDDECK_100: 41,
+        MODEL_SOUNDBOX_3: 38,
+        MODEL_CONNECT_51: 40,
+        MODEL_AMP_51: 41,
+    },
+    MENU_TOUCH_PANEL: {
+        MODEL_SOUNDBAR_10: 44,
+        MODEL_SOUNDBAR_9: None,
+        MODEL_SOUNDDECK_100: None,
+        MODEL_SOUNDBOX_3: 40,
+        MODEL_CONNECT_51: 45,
+        MODEL_AMP_51: 45,
+    },
+    MENU_LED_FLASHING: {
+        MODEL_SOUNDBAR_10: 674,
+        MODEL_SOUNDBAR_9: 690,
+        MODEL_SOUNDDECK_100: 690,
+        MODEL_SOUNDBOX_3: 627,
+        MODEL_CONNECT_51: None,
+        MODEL_AMP_51: None,
+    },
+    MENU_INPUT_STREAM_DISPLAY: {
+        MODEL_SOUNDBAR_10: 675,
+        MODEL_SOUNDBAR_9: 691,
+        MODEL_SOUNDDECK_100: 691,
+        MODEL_SOUNDBOX_3: None,
+        MODEL_CONNECT_51: None,
+        MODEL_AMP_51: None,
+    },
+    MENU_SLAVE_DISPLAY: {
+        MODEL_SOUNDBAR_10: 676,
+        MODEL_SOUNDBAR_9: 692,
+        MODEL_SOUNDDECK_100: 692,
+        MODEL_SOUNDBOX_3: None,
+        MODEL_CONNECT_51: 708,
+        MODEL_AMP_51: 708,
+    },
+    MENU_RF_POWER: {
+        MODEL_SOUNDBAR_10: 67,
+        MODEL_SOUNDBAR_9: 67,
+        MODEL_SOUNDDECK_100: 67,
+        MODEL_SOUNDBOX_3: 66,
+        MODEL_CONNECT_51: 66,
+        MODEL_AMP_51: 65,
+    },
+    MENU_RF_CHANNEL: {
+        MODEL_SOUNDBAR_10: 68,
+        MODEL_SOUNDBAR_9: 68,
+        MODEL_SOUNDDECK_100: 68,
+        MODEL_SOUNDBOX_3: None,
+        MODEL_CONNECT_51: 67,
+        MODEL_AMP_51: 66,
+    },
+    MENU_SUBWOOFER_LEVEL: {
+        MODEL_SOUNDBAR_10: 281,
+        MODEL_SOUNDBAR_9: 279,
+        MODEL_SOUNDDECK_100: 281,
+        MODEL_SOUNDBOX_3: 276,
+        MODEL_CONNECT_51: 285,
+        MODEL_AMP_51: 285,
+    },
+}
+
+# Number of MENU_EXIT commands needed to fully close the OSD after a SET.
+# The device auto-navigates into the menu hierarchy when MENU_SET is sent,
+# so we need to send one EXIT per nesting level + 1 to fully close the OSD.
+# Hierarchy depth assumed identical across models.
+MENU_EXIT_COUNT: dict[str, int] = {
+    # 1 level deep (System Setup -> item) → 2 exits
+    MENU_SLEEP_TIMER: 2,
+    MENU_CEC: 2,
+    MENU_STANDBY_MODE: 2,
+    MENU_INPUT_SELECTION: 2,
+    MENU_LIP_SYNC: 2,
+    MENU_MAX_VOLUME: 2,
+    MENU_TOUCH_PANEL: 2,
+    # 1 level deep (Speaker Setup -> item) → 2 exits
+    MENU_DRC: 2,
+    MENU_VOICE_CLARITY: 2,
+    # 1 level deep (Wireless Setup -> item) → 2 exits
+    MENU_RF_POWER: 2,
+    MENU_RF_CHANNEL: 2,
+    # 2 levels deep (Speaker Setup -> Channel Level -> Subwoofer) → 3 exits
+    MENU_SUBWOOFER_LEVEL: 3,
+    # 2 levels deep (System Setup -> Display Setup -> item) → 3 exits
+    MENU_LED_FLASHING: 3,
+    MENU_INPUT_STREAM_DISPLAY: 3,
+    MENU_SLAVE_DISPLAY: 3,
+}
+MENU_EXIT_COUNT_DEFAULT = 3
 
 SLEEP_TIMER_OPTIONS: dict[int, str] = {
     0: "15 Min",
@@ -298,4 +465,33 @@ STANDBY_MODE_OPTIONS: dict[int, str] = {
     3: "Manual",
 }
 STANDBY_MODE_REVERSE: dict[str, int] = {v: k for k, v in STANDBY_MODE_OPTIONS.items()}
+
+INPUT_SELECTION_OPTIONS: dict[int, str] = {
+    0: "Manual",
+    1: "Auto",
+}
+INPUT_SELECTION_REVERSE: dict[str, int] = {v: k for k, v in INPUT_SELECTION_OPTIONS.items()}
+
+# RF Power: display labels with internal device values (showValue array from APK)
+RF_POWER_OPTIONS: dict[int, str] = {
+    0: "ECO",
+    3: "Middle",
+    5: "Max",
+}
+RF_POWER_REVERSE: dict[str, int] = {v: k for k, v in RF_POWER_OPTIONS.items()}
+
+# RF Channel: display labels with internal device values (showValue array from APK)
+RF_CHANNEL_OPTIONS: dict[int, str] = {
+    0: "AUTO",
+    7: "2.4G1",
+    8: "2.4G2",
+    9: "2.4G3",
+    10: "5.2G1",
+    11: "5.2G2",
+    12: "5.2G3",
+    13: "5.8G1",
+    14: "5.8G2",
+    15: "5.8G3",
+}
+RF_CHANNEL_REVERSE: dict[str, int] = {v: k for k, v in RF_CHANNEL_OPTIONS.items()}
 
