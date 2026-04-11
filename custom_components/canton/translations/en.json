@@ -1,5 +1,6 @@
 {
   "config": {
+    "flow_title": "Canton: {name} ({model})",
     "step": {
       "user": {
         "title": "Canton Smart Sound",
@@ -20,6 +21,10 @@
           "host": "Host",
           "port": "Port"
         }
+      },
+      "discovery_confirm": {
+        "title": "Canton device discovered",
+        "description": "Do you want to add **{name}** ({model}) at {host}?"
       }
     },
     "error": {
@@ -28,7 +33,9 @@
     "abort": {
       "already_configured": "Device is already configured",
       "no_devices_found": "No Canton devices found on the network",
-      "device_not_found": "Selected device is no longer available"
+      "device_not_found": "Selected device is no longer available",
+      "cannot_connect": "Failed to connect to the device",
+      "not_canton_device": "This device is not a Canton Smart Sound product"
     }
   },
   "options": {

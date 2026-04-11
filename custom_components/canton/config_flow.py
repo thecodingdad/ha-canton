@@ -15,6 +15,7 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
     TextSelector,
 )
+from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .const import (
     CONF_FW_VERSION,
@@ -26,9 +27,24 @@ from .const import (
     DEFAULT_LUCI_PORT,
     DEFAULT_TUNNEL_PORT,
     DOMAIN,
+    MODEL_AMP_51,
+    MODEL_CONNECT_51,
+    MODEL_SOUNDBAR_10,
+    MODEL_SOUNDBAR_9,
+    MODEL_SOUNDBOX_3,
+    MODEL_SOUNDDECK_100,
     SOURCE_MODE_INPUTS,
     SOURCE_MODE_PRESETS,
 )
+
+_CANTON_MODELS = {
+    MODEL_SOUNDBAR_10,
+    MODEL_SOUNDBAR_9,
+    MODEL_SOUNDDECK_100,
+    MODEL_SOUNDBOX_3,
+    MODEL_CONNECT_51,
+    MODEL_AMP_51,
+}
 from .protocol import discover_devices, parse_source_list, validate_connection
 
 _LOGGER = logging.getLogger(__name__)
@@ -149,6 +165,74 @@ class CantonConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
+        )
+
+    async def async_step_zeroconf(
+        self, discovery_info: ZeroconfServiceInfo
+    ) -> ConfigFlowResult:
+        """Handle zeroconf discovery of a Canton device."""
+        host = discovery_info.host
+        props = discovery_info.properties or {}
+        model = props.get("md", "")
+        friendly_name = props.get("fn", "Canton Device")
+        cast_uuid = props.get("id", "")
+
+        # Ignore non-Canton Chromecast devices (Nest speakers, TVs, etc.)
+        if model not in _CANTON_MODELS:
+            return self.async_abort(reason="not_canton_device")
+
+        # Abort if host is already configured (covers manually-added entries
+        # from before auto-discovery existed).
+        for entry in self._async_current_entries():
+            if entry.data.get(CONF_HOST) == host:
+                return self.async_abort(reason="already_configured")
+
+        # Try to fetch LSSDP metadata to get the USN (canonical unique_id).
+        devices = await discover_devices(timeout=2)
+        device = next((d for d in devices if d["host"] == host), None)
+
+        if device:
+            unique_id = device["usn"]
+            self._selected_device = device
+        elif cast_uuid:
+            unique_id = f"chromecast_{cast_uuid}"
+            self._selected_device = {
+                "host": host,
+                "port": DEFAULT_LUCI_PORT,
+                "tunnel_port": DEFAULT_TUNNEL_PORT,
+                "usn": unique_id,
+                "name": friendly_name,
+                "model": model,
+                "fw_version": "",
+            }
+        else:
+            return self.async_abort(reason="cannot_connect")
+
+        await self.async_set_unique_id(unique_id)
+        self._abort_if_unique_id_configured(updates={CONF_HOST: host})
+
+        self.context["title_placeholders"] = {
+            "name": self._selected_device["name"],
+            "model": self._selected_device.get("model") or "Canton",
+        }
+        return await self.async_step_discovery_confirm()
+
+    async def async_step_discovery_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Confirm the discovered device before creating the entry."""
+        assert self._selected_device is not None
+
+        if user_input is not None:
+            return await self._async_create_from_device(self._selected_device)
+
+        return self.async_show_form(
+            step_id="discovery_confirm",
+            description_placeholders={
+                "name": self._selected_device["name"],
+                "model": self._selected_device.get("model") or "Canton Smart Sound",
+                "host": self._selected_device["host"],
+            },
         )
 
     async def _async_create_from_device(
