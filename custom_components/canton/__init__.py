@@ -38,6 +38,22 @@ from .const import (
     PLATFORMS,
     SIGNAL_CONNECTION_CHANGED,
     SIGNAL_STATE_UPDATED,
+    TCMD_EQ_GET,
+    TCMD_EQ_SET,
+    TCMD_MENU_EXIT,
+    TCMD_MENU_GET,
+    TCMD_MENU_SET,
+    TCMD_MUTE_GET,
+    TCMD_MUTE_SET,
+    TCMD_PRESET_GET,
+    TCMD_PRESET_RECALL,
+    TCMD_SOURCE_GET,
+    TCMD_SOURCE_INFO_GET,
+    TCMD_SOURCE_SET,
+    TCMD_STANDBY_GET,
+    TCMD_STANDBY_SET,
+    TCMD_VOLUME_GET,
+    TCMD_VOLUME_SET,
     TUNNEL_INPUT_NAMES,
     TUNNEL_PHYSICAL_SOURCES,
     TUNNEL_PLAY_MODES,
@@ -237,19 +253,19 @@ class CantonHub:
             return
 
         # Query standby state (1=on, 0=standby)
-        resp = await self._tunnel.async_send(6, 2)
+        resp = await self._tunnel.async_send(*TCMD_STANDBY_GET)
         if resp is not None and len(resp) >= 1:
             self.state.power_on = resp[0] == 1
 
         # Query input mapping (SOURCE_INFO)
-        resp = await self._tunnel.async_send(2, 2)
+        resp = await self._tunnel.async_send(*TCMD_SOURCE_INFO_GET)
         if resp is not None and len(resp) >= 3:
             for i in range(0, len(resp) - 2, 3):
                 src_id, name_id, mode_id = resp[i], resp[i + 1], resp[i + 2]
                 self.state.input_map[name_id] = (src_id, mode_id)
 
         # Query presets
-        resp = await self._tunnel.async_send(7, 2)
+        resp = await self._tunnel.async_send(*TCMD_PRESET_GET)
         if resp is not None and len(resp) >= 11:
             self.state.active_preset = resp[0]
             self.state.configured_presets = [
@@ -257,22 +273,22 @@ class CantonHub:
             ]
 
         # Query source/playmode
-        resp = await self._tunnel.async_send(3, 2)
+        resp = await self._tunnel.async_send(*TCMD_SOURCE_GET)
         if resp is not None and len(resp) >= 3:
             self._parse_source(resp)
 
         # Query EQ
-        resp = await self._tunnel.async_send(4, 2)
+        resp = await self._tunnel.async_send(*TCMD_EQ_GET)
         if resp is not None and len(resp) >= 3:
             self._parse_eq(resp)
 
         # Query volume
-        resp = await self._tunnel.async_send(12, 2)
+        resp = await self._tunnel.async_send(*TCMD_VOLUME_GET)
         if resp is not None and len(resp) >= 1:
             self._parse_volume(resp)
 
         # Query mute
-        resp = await self._tunnel.async_send(9, 2)
+        resp = await self._tunnel.async_send(*TCMD_MUTE_GET)
         if resp is not None and len(resp) >= 1:
             self.state.is_muted = resp[0] == 1
 
@@ -434,38 +450,33 @@ class CantonHub:
         """Handle incoming tunnel push messages."""
         changed = False
 
-        if cmd == (3, 1) and len(payload) >= 3:
+        if cmd == TCMD_SOURCE_SET and len(payload) >= 3:
             self._parse_source(payload)
             changed = True
-        elif cmd == (4, 1) and len(payload) >= 3:
+        elif cmd == TCMD_EQ_SET and len(payload) >= 3:
             self._parse_eq(payload)
             changed = True
-        elif cmd == (6, 1) and len(payload) >= 1:
+        elif cmd == TCMD_STANDBY_SET and len(payload) >= 1:
             self.state.power_on = payload[0] == 1
             changed = True
-        elif cmd == (7, 3) and len(payload) >= 2:
+        elif cmd == TCMD_PRESET_RECALL and len(payload) >= 2:
             # Preset notification from hardware button: [preset, 1] = recall
             preset_num = payload[0]
             if payload[1] == 1 and preset_num > 0:
                 self.state.active_preset = preset_num
-                # Capture state after a short delay (device needs time to apply)
                 self.hass.async_create_task(
                     self._delayed_preset_capture(preset_num)
                 )
             changed = True
-        elif cmd == (5, 1) and len(payload) >= 5:
+        elif cmd == TCMD_MENU_SET and len(payload) >= 5:
             menu_id = int.from_bytes(payload[:4], "big")
-            value = payload[4]
-            if payload[4] < 128:
-                value = payload[4]
-            else:
-                value = payload[4] - 256
+            value = payload[4] if payload[4] < 128 else payload[4] - 256
             self.state.menu_values[menu_id] = value
             changed = True
-        elif cmd == (9, 1) and len(payload) >= 1:
+        elif cmd == TCMD_MUTE_SET and len(payload) >= 1:
             self.state.is_muted = payload[0] == 1
             changed = True
-        elif cmd == (12, 1) and len(payload) >= 1:
+        elif cmd == TCMD_VOLUME_SET and len(payload) >= 1:
             self._parse_volume(payload)
             changed = True
 
@@ -480,13 +491,13 @@ class CantonHub:
         if not self._tunnel:
             return
         # Re-read current state
-        resp = await self._tunnel.async_send(3, 2)
+        resp = await self._tunnel.async_send(*TCMD_SOURCE_GET)
         if resp and len(resp) >= 3:
             self._parse_source(resp)
-        resp = await self._tunnel.async_send(4, 2)
+        resp = await self._tunnel.async_send(*TCMD_EQ_GET)
         if resp and len(resp) >= 3:
             self._parse_eq(resp)
-        resp = await self._tunnel.async_send(12, 2)
+        resp = await self._tunnel.async_send(*TCMD_VOLUME_GET)
         if resp and len(resp) >= 1:
             self._parse_volume(resp)
 
@@ -612,7 +623,9 @@ class CantonHub:
         """Get a menu value by ID."""
         if not self._tunnel:
             return None
-        resp = await self._tunnel.async_send(5, 2, menu_id.to_bytes(4, "big"))
+        resp = await self._tunnel.async_send(
+            *TCMD_MENU_GET, menu_id.to_bytes(4, "big")
+        )
         if resp and len(resp) >= 5:
             val = resp[4]
             return val if val < 128 else val - 256
@@ -623,8 +636,10 @@ class CantonHub:
         if not self._tunnel:
             return
         await self._tunnel.async_send_fire(
-            5, 1, menu_id.to_bytes(4, "big") + bytes([value & 0xFF])
+            *TCMD_MENU_SET, menu_id.to_bytes(4, "big") + bytes([value & 0xFF])
         )
+        # Close OSD menu on the device display
+        await self._tunnel.async_send_fire(*TCMD_MENU_EXIT)
 
     # --- Command methods ---
 
@@ -641,15 +656,19 @@ class CantonHub:
         if self._is_network_source():
             await self._luci.async_send_fire(MID_VOLUME, CMD_SET, str(volume))
         elif self._tunnel:
-            await self._tunnel.async_send_fire(12, 1, bytes([volume]))
+            await self._tunnel.async_send_fire(*TCMD_VOLUME_SET, bytes([volume]))
 
     async def async_set_mute(self, mute: bool) -> None:
         if self._tunnel:
-            await self._tunnel.async_send_fire(9, 1, bytes([1 if mute else 0]))
+            await self._tunnel.async_send_fire(
+                *TCMD_MUTE_SET, bytes([1 if mute else 0])
+            )
 
     async def async_set_power(self, on: bool) -> None:
         if self._tunnel:
-            await self._tunnel.async_send_fire(6, 1, bytes([1 if on else 0]))
+            await self._tunnel.async_send_fire(
+                *TCMD_STANDBY_SET, bytes([1 if on else 0])
+            )
 
     async def async_set_input(self, input_name: str) -> None:
         """Set input by name (e.g., 'CD', 'TV', 'AUX')."""
@@ -667,7 +686,7 @@ class CantonHub:
             )
             return
         await self._tunnel.async_send_fire(
-            3, 1,
+            *TCMD_SOURCE_SET,
             bytes([source_id, name_id, self.state.play_mode_id]),
         )
 
@@ -679,7 +698,7 @@ class CantonHub:
         if mode_id is None or not self._tunnel:
             return
         await self._tunnel.async_send_fire(
-            3, 1,
+            *TCMD_SOURCE_SET,
             bytes([self.state.source_id, self.state.input_name_id, mode_id]),
         )
 
@@ -688,8 +707,7 @@ class CantonHub:
         if not self._tunnel:
             return
 
-        # Send PRESET_SET [preset, 1] = recall (same as app does)
-        await self._tunnel.async_send_fire(7, 3, bytes([preset, 1]))
+        await self._tunnel.async_send_fire(*TCMD_PRESET_RECALL, bytes([preset, 1]))
         self.state.active_preset = preset
         async_dispatcher_send(
             self.hass, SIGNAL_STATE_UPDATED.format(mac=self.usn)
@@ -708,7 +726,7 @@ class CantonHub:
         m = mid if mid is not None else self.state.eq_mid
         b = bass if bass is not None else self.state.eq_bass
         await self._tunnel.async_send_fire(
-            4, 1, bytes([t & 0xFF, m & 0xFF, b & 0xFF, self.state.eq_range])
+            *TCMD_EQ_SET, bytes([t & 0xFF, m & 0xFF, b & 0xFF, self.state.eq_range])
         )
 
     # --- Chromecast (built-in) ---

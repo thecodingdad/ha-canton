@@ -28,6 +28,7 @@ from .const import (
     RECONNECT_DELAYS,
     SOURCE_CAPABILITY_BITS,
     SOURCE_MAP,
+    TCMD_VOLUME_GET,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -595,7 +596,7 @@ class TunnelProtocol:
             await asyncio.sleep(KEEPALIVE_INTERVAL)
             if self._closing:
                 break
-            result = await self.async_send(12, 2)
+            result = await self.async_send(*TCMD_VOLUME_GET)
             if result is None and not self._closing:
                 _LOGGER.debug("Tunnel keepalive failed, disconnecting")
                 self._connected = False
