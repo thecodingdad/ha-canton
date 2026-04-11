@@ -10,16 +10,16 @@ This integration communicates directly with your Canton devices over the local n
 ## Features
 
 - Full local control of Canton Smart Sound devices — no cloud required
-- Automatic device discovery via LSSDP
+- **Auto-discovery** — devices appear automatically in Home Assistant, just click Add
 - Power on/off, volume, mute control
 - Input source selection (BDP, SAT, PS, TV, CD, DVD, AUX, NET, BT)
 - Sound mode selection (Stereo, Movie, Music, Night, Party, Discrete)
 - 3-band EQ (Bass, Mid, Treble) with -10 to +10 dB range
-- Subwoofer level control
+- Subwoofer level control, Lip Sync delay
 - 10 device presets — recall stored configurations
 - Live media metadata (title, artist, album, cover art) for NET and BT sources
 - Playback controls (play/pause, next/previous, seek, shuffle, repeat) for streaming sources
-- OSD menu settings (CEC, DRC, Sleep Timer, Standby Mode, Touch Panel, etc.)
+- OSD menu settings (CEC, DRC, Voice Clarity, Sleep Timer, Standby Mode, Input Selection, RF Power/Channel, Touch Panel, etc.)
 - Built-in Chromecast support — cast TTS, URLs, and media to the device
 - Push state updates from the device — no polling delay
 - Automatic reconnect on network interruption
@@ -64,9 +64,12 @@ Or add manually:
 
 ### Adding a Device
 
+Canton Smart Sound devices are discovered automatically. After installation and a Home Assistant restart, your device will appear under **Settings** > **Devices & Services** in the **Discovered** section. Click **Add** to set it up.
+
+If the device is not discovered automatically:
 1. Go to **Settings** > **Devices & Services** > **Add Integration**
 2. Search for **Canton Smart Sound**
-3. Choose **Scan network for devices** (automatic discovery) or **Enter device manually** (IP address)
+3. Choose **Scan network for devices** or **Enter device manually** (IP address)
 4. Select your device and confirm
 
 ### Options
@@ -99,6 +102,8 @@ The main entity providing device control.
 
 ### Selects
 
+Not all entities are available on every model. Entities are only created when supported by the connected device.
+
 | Entity | Options | Description |
 |--------|---------|-------------|
 | Input | BDP, SAT, PS, TV, CD, DVD, AUX, NET, BT | Select the active input source |
@@ -106,8 +111,13 @@ The main entity providing device control.
 | Preset | Preset 1-10 (only configured ones) | Recall a saved preset (restores input, volume, EQ, and play mode) |
 | Sleep Timer | Off, 15 Min, 30 Min, 45 Min, 60 Min | Auto-standby timer |
 | Standby Mode | ECO, Network, Signal, Manual | Standby behavior when idle. ECO saves the most power, Network keeps the device reachable |
+| Input Selection | Manual, Auto | Whether the device auto-detects the active input source |
+| RF Power | ECO, Middle, Max | Transmit power of the wireless surround connection |
+| RF Channel | AUTO, 2.4G1–3, 5.2G1–3, 5.8G1–3 | Wireless surround frequency channel |
 
 ### Numbers
+
+Not all entities are available on every model. Entities are only created when supported by the connected device.
 
 | Entity | Range | Unit | Description |
 |--------|-------|------|-------------|
@@ -117,14 +127,18 @@ The main entity providing device control.
 | EQ Treble | -10 to +10 | dB | Treble equalization |
 | Max Volume | 0-70 | — | Maximum volume limit. Prevents the device from exceeding this level |
 | Subwoofer Level | -10 to +10 | dB | Subwoofer output level |
+| Lip Sync | 0-200 | ms | Audio delay to synchronize sound with video |
 
 ### Switches
+
+Not all entities are available on every model. Entities are only created when supported by the connected device.
 
 | Entity | Description |
 |--------|-------------|
 | Mute | Mute/unmute the device audio |
 | HDMI CEC | Enable/disable HDMI CEC control. When enabled, the soundbar responds to TV power and volume commands |
 | Dynamic Range Compression | Enable/disable DRC. Compresses the dynamic range — useful for night listening |
+| Voice Clarity | Enhance speech intelligibility |
 | Touch Panel | Enable/disable the touch controls on the device |
 | LED Flashing | Enable/disable LED flashing animations on the device |
 | Input Stream Display | Enable/disable automatic display of the current audio stream format (e.g. Dolby Digital, PCM) |
