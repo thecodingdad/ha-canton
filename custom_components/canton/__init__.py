@@ -838,11 +838,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: CantonConfigEntry) -> bo
     entry.runtime_data = hub
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    async def _async_stop(_event) -> None:
+        await hub.async_teardown()
+
     entry.async_on_unload(
-        hass.bus.async_listen_once(
-            "homeassistant_stop",
-            lambda _: hass.async_create_task(hub.async_teardown()),
-        )
+        hass.bus.async_listen_once("homeassistant_stop", _async_stop)
     )
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
