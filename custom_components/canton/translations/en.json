@@ -47,5 +47,8 @@
         }
       }
     }
+  },
+  "common": {
+    "preset_active_suffix": "(active)"
   }
 }

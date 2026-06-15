@@ -7,9 +7,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.translation import async_get_translations
 
 from . import CantonHub
 from .const import (
+    DOMAIN,
     INPUT_SELECTION_OPTIONS,
     INPUT_SELECTION_REVERSE,
     MENU_INPUT_SELECTION,
@@ -48,10 +50,16 @@ async def async_setup_entry(
 ) -> None:
     """Set up Canton select entities."""
     hub: CantonHub = entry.runtime_data
+    translations = await async_get_translations(
+        hass, hass.config.language, "common", {DOMAIN}
+    )
+    active_suffix = translations.get(
+        f"component.{DOMAIN}.common.preset_active_suffix", "(active)"
+    )
     entities: list = [
         CantonInputSelect(hub),
         CantonPlayModeSelect(hub),
-        CantonPresetSelect(hub),
+        CantonPresetSelect(hub, active_suffix),
     ]
     for name, label, icon, options, reverse in _SELECT_DEFINITIONS:
         if hub.menu_id(name) is not None:
@@ -175,23 +183,31 @@ class CantonPresetSelect(CantonEntity, SelectEntity):
     _attr_name = "Preset"
     _attr_icon = "mdi:playlist-star"
 
-    def __init__(self, hub: CantonHub) -> None:
+    def __init__(self, hub: CantonHub, active_suffix: str) -> None:
         super().__init__(hub)
         self._attr_unique_id = f"{hub.usn}_preset"
+        self._active_suffix = active_suffix
+
+    @property
+    def _active_label(self) -> str | None:
+        n = self._hub.state.active_preset
+        return f"Preset {n} {self._active_suffix}" if n > 0 else None
 
     @property
     def options(self) -> list[str]:
-        return [
+        base = [
             f"Preset {i}" for i in self._hub.state.configured_presets
-        ] if self._hub.state.configured_presets else ["Preset 1"]
+        ] or ["Preset 1"]
+        label = self._active_label
+        return [label, *base] if label else base
 
     @property
     def current_option(self) -> str | None:
-        if self._hub.state.active_preset > 0:
-            return f"Preset {self._hub.state.active_preset}"
-        return None
+        return self._active_label
 
     async def async_select_option(self, option: str) -> None:
+        if option.endswith(self._active_suffix):
+            return
         try:
             preset = int(option.split()[-1])
         except (ValueError, IndexError):
