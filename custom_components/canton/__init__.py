@@ -500,9 +500,14 @@ class CantonHub:
             self.hass, SIGNAL_STATE_UPDATED.format(mac=self.usn)
         )
 
-    @callback
     def _on_connection_change(self, connected: bool) -> None:
-        """Handle connection state changes."""
+        """Handle connection state changes (may be called from any thread)."""
+        self.hass.loop.call_soon_threadsafe(
+            self._handle_connection_change_in_loop, connected
+        )
+
+    @callback
+    def _handle_connection_change_in_loop(self, connected: bool) -> None:
         async_dispatcher_send(
             self.hass,
             SIGNAL_CONNECTION_CHANGED.format(mac=self.usn),
