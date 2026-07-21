@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from homeassistant.core import callback
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import Entity
@@ -52,5 +53,6 @@ class CantonEntity(Entity):
             )
         )
 
+    @callback
     def _on_connection_changed(self, connected: bool) -> None:
-        self.async_write_ha_state()
+        self.hass.loop.call_soon_threadsafe(self.async_write_ha_state)
