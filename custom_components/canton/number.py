@@ -6,6 +6,7 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import CantonHub
@@ -17,11 +18,11 @@ from .const import (
 )
 from .entity import CantonEntity
 
-# (setting_name, label, icon, min, max, unit)
+# (setting_name, label, icon, min, max, unit, is_config)
 _NUMBER_DEFINITIONS = [
-    (MENU_MAX_VOLUME, "Max Volume", "mdi:volume-off", 0, 70, ""),
-    (MENU_SUBWOOFER_LEVEL, "Subwoofer Level", "mdi:speaker", -10, 10, "dB"),
-    (MENU_LIP_SYNC, "Lip Sync", "mdi:television-speaker", 0, 200, "ms"),
+    (MENU_MAX_VOLUME, "Max Volume", "mdi:volume-off", 0, 70, "", True),
+    (MENU_SUBWOOFER_LEVEL, "Subwoofer Level", "mdi:speaker", -10, 10, "dB", False),
+    (MENU_LIP_SYNC, "Lip Sync", "mdi:television-speaker", 0, 200, "ms", True),
 ]
 
 
@@ -38,10 +39,10 @@ async def async_setup_entry(
         CantonEQNumber(hub, "mid", "EQ Mid"),
         CantonEQNumber(hub, "treble", "EQ Treble"),
     ]
-    for name, label, icon, min_val, max_val, unit in _NUMBER_DEFINITIONS:
+    for name, label, icon, min_val, max_val, unit, is_config in _NUMBER_DEFINITIONS:
         if hub.menu_id(name) is not None:
             entities.append(
-                CantonMenuNumber(hub, name, label, icon, min_val, max_val, unit)
+                CantonMenuNumber(hub, name, label, icon, min_val, max_val, unit, is_config)
             )
     async_add_entities(entities)
 
@@ -100,6 +101,7 @@ class CantonMenuNumber(CantonEntity, NumberEntity):
         min_val: int,
         max_val: int,
         unit: str,
+        is_config: bool = False,
     ) -> None:
         super().__init__(hub)
         self._setting_name = setting_name
@@ -109,6 +111,8 @@ class CantonMenuNumber(CantonEntity, NumberEntity):
         self._attr_native_min_value = min_val
         self._attr_native_max_value = max_val
         self._attr_native_unit_of_measurement = unit or None
+        if is_config:
+            self._attr_entity_category = EntityCategory.CONFIG
 
     @property
     def native_value(self) -> float | None:

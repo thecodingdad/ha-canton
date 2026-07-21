@@ -6,6 +6,7 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import CantonHub
@@ -86,6 +87,8 @@ class CantonMuteSwitch(CantonEntity, SwitchEntity):
 
 class CantonMenuSwitch(CantonEntity, SwitchEntity):
     """Generic switch entity for Canton menu On/Off settings."""
+
+    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(
         self,

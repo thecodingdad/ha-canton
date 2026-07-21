@@ -6,6 +6,7 @@ from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.translation import async_get_translations
 
@@ -33,13 +34,13 @@ from .const import (
 )
 from .entity import CantonEntity
 
-# (setting_name, label, icon, options_map, reverse_map)
+# (setting_name, label, icon, options_map, reverse_map, is_config)
 _SELECT_DEFINITIONS = [
-    (MENU_SLEEP_TIMER, "Sleep Timer", "mdi:timer-sand", SLEEP_TIMER_OPTIONS, SLEEP_TIMER_REVERSE),
-    (MENU_STANDBY_MODE, "Standby Mode", "mdi:power-sleep", STANDBY_MODE_OPTIONS, STANDBY_MODE_REVERSE),
-    (MENU_INPUT_SELECTION, "Input Selection", "mdi:import", INPUT_SELECTION_OPTIONS, INPUT_SELECTION_REVERSE),
-    (MENU_RF_POWER, "RF Power", "mdi:wifi-strength-4", RF_POWER_OPTIONS, RF_POWER_REVERSE),
-    (MENU_RF_CHANNEL, "RF Channel", "mdi:wifi", RF_CHANNEL_OPTIONS, RF_CHANNEL_REVERSE),
+    (MENU_SLEEP_TIMER, "Sleep Timer", "mdi:timer-sand", SLEEP_TIMER_OPTIONS, SLEEP_TIMER_REVERSE, False),
+    (MENU_STANDBY_MODE, "Standby Mode", "mdi:power-sleep", STANDBY_MODE_OPTIONS, STANDBY_MODE_REVERSE, True),
+    (MENU_INPUT_SELECTION, "Input Selection", "mdi:import", INPUT_SELECTION_OPTIONS, INPUT_SELECTION_REVERSE, True),
+    (MENU_RF_POWER, "RF Power", "mdi:wifi-strength-4", RF_POWER_OPTIONS, RF_POWER_REVERSE, True),
+    (MENU_RF_CHANNEL, "RF Channel", "mdi:wifi", RF_CHANNEL_OPTIONS, RF_CHANNEL_REVERSE, True),
 ]
 
 
@@ -61,10 +62,10 @@ async def async_setup_entry(
         CantonPlayModeSelect(hub),
         CantonPresetSelect(hub, active_suffix),
     ]
-    for name, label, icon, options, reverse in _SELECT_DEFINITIONS:
+    for name, label, icon, options, reverse, is_config in _SELECT_DEFINITIONS:
         if hub.menu_id(name) is not None:
             entities.append(
-                CantonMenuSelect(hub, name, label, icon, options, reverse)
+                CantonMenuSelect(hub, name, label, icon, options, reverse, is_config)
             )
     async_add_entities(entities)
 
@@ -142,6 +143,7 @@ class CantonMenuSelect(CantonEntity, SelectEntity):
         icon: str,
         options_map: dict[int, str],
         reverse_map: dict[str, int],
+        is_config: bool = False,
     ) -> None:
         super().__init__(hub)
         self._setting_name = setting_name
@@ -151,6 +153,8 @@ class CantonMenuSelect(CantonEntity, SelectEntity):
         self._attr_name = label
         self._attr_icon = icon
         self._attr_options = list(options_map.values())
+        if is_config:
+            self._attr_entity_category = EntityCategory.CONFIG
 
     @property
     def current_option(self) -> str | None:
