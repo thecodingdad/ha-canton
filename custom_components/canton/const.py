@@ -274,10 +274,19 @@ TUNNEL_INPUT_NAMES: dict[int, str] = {
 }
 TUNNEL_INPUT_NAMES_REVERSE: dict[str, int] = {v: k for k, v in TUNNEL_INPUT_NAMES.items()}
 
-# Names that can be selected as an input (everything except the "unassigned" entry)
-SELECTABLE_INPUT_NAMES: list[str] = [
-    name for nid, name in TUNNEL_INPUT_NAMES.items() if nid != INPUT_NAME_UNASSIGNED
-]
+def input_label(source_id: int, name_id: int) -> str:
+    """Build the display label of a physical input.
+
+    Inputs are addressed by their physical source, so every input can be selected —
+    also the ones left unnamed on the device. The name assigned under
+    "System Setup -> Input Setup -> Input Name" is appended in brackets when it adds
+    information, e.g. "HDMI 2 (PC)".
+    """
+    source = TUNNEL_PHYSICAL_SOURCES.get(source_id, f"Source {source_id}")
+    name = TUNNEL_INPUT_NAMES.get(name_id)
+    if not name or name_id == INPUT_NAME_UNASSIGNED or name == source:
+        return source
+    return f"{source} ({name})"
 
 # Menu IDs of the per-input name settings ("System Setup -> Input Setup -> Input Name").
 # The menu value is the nameId, so these allow reading which name a physical input carries.

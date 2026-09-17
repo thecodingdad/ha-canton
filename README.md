@@ -12,7 +12,7 @@ This integration communicates directly with your Canton devices over the local n
 - Full local control of Canton Smart Sound devices — no cloud required
 - **Auto-discovery** — devices appear automatically in Home Assistant, just click Add
 - Power on/off, volume, mute control
-- Input source selection using the names configured on the device (*System Setup → Input Setup → Input Name*) — unnamed inputs are hidden
+- Input source selection covering every physical input, labelled with the name configured on the device (*System Setup → Input Setup → Input Name*), e.g. `HDMI 2 (PC)`
 - Sound mode selection (Stereo, Movie, Music, Night, Party, Discrete)
 - 3-band EQ (Bass, Mid, Treble) with -10 to +10 dB range
 - Subwoofer level control, Lip Sync delay

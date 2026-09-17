@@ -87,7 +87,7 @@ class CantonInputSelect(CantonEntity, SelectEntity):
 
     @property
     def current_option(self) -> str | None:
-        return self._hub.state.input_name or None
+        return self._hub.current_input
 
     async def async_select_option(self, option: str) -> None:
         await self._hub.async_set_input(option)

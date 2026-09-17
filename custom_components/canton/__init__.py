@@ -126,6 +126,7 @@ class CantonState:
     eq_mid: int = 0
     eq_bass: int = 0
     eq_range: int = 10
+    # sourceId -> (nameId, playModeId) as reported by SOURCE_INFO
     input_map: dict[int, tuple[int, int]] = field(default_factory=dict)
     # Menu settings
     menu_values: dict[int, int] = field(default_factory=dict)
@@ -190,22 +191,29 @@ class CantonHub:
     def input_list(self) -> list[str]:
         """Return the inputs as configured on the device.
 
-        Every physical input carries a name assigned under
-        "System Setup -> Input Setup -> Input Name", reported by SOURCE_INFO.
-        Inputs left unnamed ("---") are skipped. Falls back to all selectable names
-        while the mapping is unknown.
+        Inputs are listed by physical source as reported by SOURCE_INFO, so every input
+        is selectable. The name assigned under "System Setup -> Input Setup -> Input
+        Name" is shown in brackets, e.g. "HDMI 2 (PC)". Falls back to all known physical
+        sources while the mapping is unknown.
         """
-        from .const import INPUT_NAME_UNASSIGNED, SELECTABLE_INPUT_NAMES
+        from .const import INPUT_NAME_UNASSIGNED, TUNNEL_PHYSICAL_SOURCES, input_label
 
-        names = [
-            TUNNEL_INPUT_NAMES[name_id]
-            # Sort by physical source so the order matches the device
-            for name_id, (source_id, _) in sorted(
-                self.state.input_map.items(), key=lambda item: item[1][0]
-            )
-            if name_id != INPUT_NAME_UNASSIGNED and name_id in TUNNEL_INPUT_NAMES
+        labels = [
+            input_label(source_id, name_id)
+            for source_id, (name_id, _) in sorted(self.state.input_map.items())
         ]
-        return names or SELECTABLE_INPUT_NAMES
+        return labels or [
+            input_label(sid, INPUT_NAME_UNASSIGNED) for sid in TUNNEL_PHYSICAL_SOURCES
+        ]
+
+    @property
+    def current_input(self) -> str | None:
+        """Return the label of the currently selected input."""
+        from .const import input_label
+
+        if not self.state.source_id:
+            return None
+        return input_label(self.state.source_id, self.state.input_name_id)
 
     async def async_setup(self) -> None:
         """Set up the connection to the device."""
@@ -336,7 +344,7 @@ class CantonHub:
             if resp is not None and len(resp) >= 3:
                 for i in range(0, len(resp) - 2, 3):
                     src_id, name_id, mode_id = resp[i], resp[i + 1], resp[i + 2]
-                    self.state.input_map[name_id] = (src_id, mode_id)
+                    self.state.input_map[src_id] = (name_id, mode_id)
 
             # Query presets
             resp = await tunnel.async_send(*TCMD_PRESET_GET)
@@ -793,19 +801,25 @@ class CantonHub:
             self.state.power_on = on
         async_dispatcher_send(self.hass, SIGNAL_STATE_UPDATED.format(mac=self.usn))
 
-    async def async_set_input(self, input_name: str) -> None:
-        """Set input by name (e.g., 'CD', 'TV', 'AUX')."""
-        from .const import TUNNEL_INPUT_NAMES_REVERSE
+    async def async_set_input(self, label: str) -> None:
+        """Set input by its display label (e.g., 'HDMI 2 (PC)' or 'OPT 1')."""
+        from .const import input_label
 
-        name_id = TUNNEL_INPUT_NAMES_REVERSE.get(input_name)
-        if name_id is None:
-            return
-        mapping = self.state.input_map.get(name_id)
-        if mapping:
-            source_id = mapping[0]
-        else:
+        for source_id, (name_id, _) in self.state.input_map.items():
+            if input_label(source_id, name_id) == label:
+                await self.async_set_input_source(source_id)
+                return
+        _LOGGER.warning("Unknown input: %s", label)
+
+    async def async_set_input_source(self, source_id: int) -> None:
+        """Set input by its physical source ID."""
+        from .const import TUNNEL_PHYSICAL_SOURCES
+
+        mapping = self.state.input_map.get(source_id)
+        if mapping is None:
             _LOGGER.warning(
-                "No source mapping for input %s (nameId=%s)", input_name, name_id
+                "Input %s is not available on this device",
+                TUNNEL_PHYSICAL_SOURCES.get(source_id, source_id),
             )
             return
 
@@ -814,7 +828,7 @@ class CantonHub:
                 return
             await tunnel.async_send_fire(
                 *TCMD_SOURCE_SET,
-                bytes([source_id, name_id, self.state.play_mode_id]),
+                bytes([source_id, mapping[0], self.state.play_mode_id]),
             )
             await self._async_read_source(tunnel)
         async_dispatcher_send(self.hass, SIGNAL_STATE_UPDATED.format(mac=self.usn))

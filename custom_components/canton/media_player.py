@@ -99,7 +99,7 @@ class CantonMediaPlayer(CantonEntity, MediaPlayerEntity):
         if self._is_preset_mode:
             p = self._hub.state.active_preset
             return f"Preset {p}" if p > 0 else None
-        return self._hub.state.input_name or None
+        return self._hub.current_input
 
     @property
     def source_list(self) -> list[str]:
