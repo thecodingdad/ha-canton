@@ -24,6 +24,19 @@ RECONNECT_DELAYS = [5, 10, 30, 60]
 COMMAND_TIMEOUT = 5
 DISCOVERY_TIMEOUT = 5
 
+# Tunnel sharing
+# The device accepts only ONE tunnel connection at a time — a second controller
+# (Canton app, Unfolded Circle Remote, another HA instance) takes the slot over and
+# the current connection is closed by the device. The integration therefore holds the
+# tunnel permanently only while nobody else wants it (exclusive mode) and falls back
+# to short on-demand sessions plus polling (shared mode) when it gets taken away.
+SHARED_POLL_INTERVAL = 10
+# How long to stay in shared mode before probing for exclusive access again.
+# Grows with every failed attempt, capped at the last value.
+SHARED_MODE_BACKOFF = [300, 600, 900, 1800]
+# An exclusive connection surviving this long counts as success and resets the backoff
+EXCLUSIVE_STABLE_SECONDS = 60
+
 # LUCI header
 HEADER_SIZE = 10
 
@@ -230,19 +243,53 @@ TCMD_BT_PAIR = (10, 1)
 TCMD_VOLUME_SET = (12, 1)
 TCMD_VOLUME_GET = (12, 2)
 
-# Tunnel input name IDs (nameId in SOURCE_SET payload)
+# Tunnel input name IDs (nameId in SOURCE_SET payload).
+# The device assigns a name to every physical input under
+# "System Setup -> Input Setup -> Input Name"; the stored value is the nameId below.
+# Source: the ENUM options of the input name menus in the Canton app (menu IDs 0x2511+),
+# verified against SOURCE_INFO on a Smart Soundbar 10.
+INPUT_NAME_UNASSIGNED = 1
 TUNNEL_INPUT_NAMES: dict[int, str] = {
+    INPUT_NAME_UNASSIGNED: "---",
     2: "TV",
     3: "BDP",
     4: "SAT",
     5: "CD",
     6: "DVD",
+    7: "CAM",
+    8: "REC",
+    9: "PAD",
+    10: "POD",
+    11: "TAB",
+    12: "TUN",
+    13: "DAB",
     14: "PS",
+    15: "VCR",
+    16: "ATV",
+    17: "PC",
     18: "AUX",
+    # Virtual sources, not selectable as an input name on the device
     19: "NET",
     20: "BT",
 }
 TUNNEL_INPUT_NAMES_REVERSE: dict[str, int] = {v: k for k, v in TUNNEL_INPUT_NAMES.items()}
+
+# Names that can be selected as an input (everything except the "unassigned" entry)
+SELECTABLE_INPUT_NAMES: list[str] = [
+    name for nid, name in TUNNEL_INPUT_NAMES.items() if nid != INPUT_NAME_UNASSIGNED
+]
+
+# Menu IDs of the per-input name settings ("System Setup -> Input Setup -> Input Name").
+# The menu value is the nameId, so these allow reading which name a physical input carries.
+INPUT_NAME_MENU_IDS: dict[int, str] = {
+    0x2511: "HDMI 1",
+    0x2512: "HDMI 2",
+    0x2513: "HDMI 3",
+    0x2514: "ARC",
+    0x2515: "OPT",
+    0x2516: "COAX",
+    0x2517: "Analog",
+}
 
 # Tunnel play mode IDs
 TUNNEL_PLAY_MODES: dict[int, str] = {

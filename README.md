@@ -12,7 +12,7 @@ This integration communicates directly with your Canton devices over the local n
 - Full local control of Canton Smart Sound devices — no cloud required
 - **Auto-discovery** — devices appear automatically in Home Assistant, just click Add
 - Power on/off, volume, mute control
-- Input source selection (BDP, SAT, PS, TV, CD, DVD, AUX, NET, BT)
+- Input source selection using the names configured on the device (*System Setup → Input Setup → Input Name*) — unnamed inputs are hidden
 - Sound mode selection (Stereo, Movie, Music, Night, Party, Discrete)
 - 3-band EQ (Bass, Mid, Treble) with -10 to +10 dB range
 - Subwoofer level control, Lip Sync delay
@@ -23,7 +23,7 @@ This integration communicates directly with your Canton devices over the local n
 - Built-in Chromecast support — cast TTS, URLs, and media to the device
 - Push state updates from the device — no polling delay
 - Automatic reconnect on network interruption
-- Works in parallel with the official Canton app
+- Works in parallel with the official Canton app and other controllers (adaptive tunnel sharing)
 
 ## Prerequisites
 
@@ -167,9 +167,19 @@ The device page in Home Assistant shows:
 - **Firmware:** Version from device
 - **MAC Address:** From device discovery
 
-## Using the Canton App alongside Home Assistant
+## Using the Canton App or other controllers alongside Home Assistant
 
-The Canton app and this integration can be used in parallel without any conflict. Both share control of the soundbar — changes made in one are visible in the other.
+Canton devices accept only a **single** connection on the tunnel port (50006) — a second client (Canton app, Unfolded Circle Remote, another Home Assistant) takes the slot over and the device closes the previous connection. Two controllers holding the tunnel permanently would disconnect each other in a loop.
+
+The integration handles this automatically:
+
+- **Exclusive mode** (default): the tunnel is held permanently, state changes arrive as push messages — no delay.
+- **Shared mode**: as soon as another controller takes the tunnel, the integration stops holding it and switches to short sessions (~200 ms) per command plus a state poll every 10 seconds. Commands keep working, device-side changes appear within the poll interval.
+- Every few minutes the integration checks whether the tunnel is free again and returns to exclusive mode. The retry interval grows from 5 up to 30 minutes while the tunnel stays occupied.
+
+Connecting never sends the tunnel start command unless the plain connect fails — the device keeps the port open, and the start command would kick whoever is connected.
+
+The Unfolded Circle integration [uc-intg-canton-smart](https://github.com/thecodingdad/uc-intg-canton-smart) uses the same mechanism, so a Remote and Home Assistant can control the same device.
 
 If the connection is lost unexpectedly (e.g. network interruption or device standby), the integration will automatically reconnect with exponential backoff (10s, 30s, 60s).
 

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, AsyncIterator
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -52,6 +53,7 @@ from .const import (
     TUNNEL_PLAY_MODES,
 )
 from .protocol import LuciMessage, LuciProtocol, TunnelProtocol
+from .tunnel_manager import TunnelManager, TunnelMode
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -150,7 +152,7 @@ class CantonHub:
     ) -> None:
         self.hass = hass
         self._luci = LuciProtocol(host, port)
-        self._tunnel: TunnelProtocol | None = None
+        self._tunnel: TunnelManager | None = None
         self._tunnel_port = tunnel_port
         self.usn = usn
         self.host = host
@@ -168,32 +170,77 @@ class CantonHub:
 
     @property
     def is_connected(self) -> bool:
-        return self._tunnel is not None and self._tunnel.is_connected
+        """Return True if the device is usable.
+
+        In shared mode no permanent tunnel connection exists, so the device counts
+        as connected while LUCI is up and the last tunnel session succeeded.
+        """
+        return (
+            self._luci.is_connected
+            and self._tunnel is not None
+            and self._tunnel.available
+        )
+
+    @property
+    def tunnel_mode(self) -> TunnelMode:
+        """Return whether the tunnel is held exclusively or shared."""
+        return self._tunnel.mode if self._tunnel else TunnelMode.EXCLUSIVE
+
+    @property
+    def input_list(self) -> list[str]:
+        """Return the inputs as configured on the device.
+
+        Every physical input carries a name assigned under
+        "System Setup -> Input Setup -> Input Name", reported by SOURCE_INFO.
+        Inputs left unnamed ("---") are skipped. Falls back to all selectable names
+        while the mapping is unknown.
+        """
+        from .const import INPUT_NAME_UNASSIGNED, SELECTABLE_INPUT_NAMES
+
+        names = [
+            TUNNEL_INPUT_NAMES[name_id]
+            # Sort by physical source so the order matches the device
+            for name_id, (source_id, _) in sorted(
+                self.state.input_map.items(), key=lambda item: item[1][0]
+            )
+            if name_id != INPUT_NAME_UNASSIGNED and name_id in TUNNEL_INPUT_NAMES
+        ]
+        return names or SELECTABLE_INPUT_NAMES
 
     async def async_setup(self) -> None:
         """Set up the connection to the device."""
         self._luci.on_message = self._on_luci_message
+        self._luci.on_connection_change = self._on_connection_change
 
         if not await self._luci.async_connect():
             raise ConfigEntryNotReady(
                 f"Cannot connect to Canton device at {self._luci.host}"
             )
 
-        self._tunnel = TunnelProtocol(
-            self._luci.host, self._tunnel_port, self._luci
+        # Tunnel access is managed adaptively: held permanently while free, shared
+        # through short sessions when another controller uses it.
+        self._tunnel = TunnelManager(
+            host=self._luci.host,
+            port=self._tunnel_port,
+            luci=self._luci,
+            on_message=self._on_tunnel_message,
+            poll=self._async_poll_state,
+            log_id=self.device_name or self.host,
+            loop=self.hass.loop,
         )
-        self._tunnel.on_message = self._on_tunnel_message
-        self._tunnel.on_connection_change = self._on_connection_change
-
-        if not await self._tunnel.async_connect():
-            raise ConfigEntryNotReady(
-                f"Cannot connect to Canton tunnel at {self._luci.host}:{self._tunnel_port}"
-            )
+        await self._tunnel.start()
 
         # Load stored presets
         await self._load_presets()
 
         await self._fetch_initial_state()
+
+        if not self._tunnel.available:
+            await self._tunnel.stop()
+            await self._luci.async_disconnect()
+            raise ConfigEntryNotReady(
+                f"Cannot reach Canton tunnel at {self._luci.host}:{self._tunnel_port}"
+            )
 
         # Capture current state for the active preset
         if self.state.active_preset > 0:
@@ -205,9 +252,42 @@ class CantonHub:
         self._teardown = True
         await self._async_cancel_reconnect()
         if self._tunnel:
-            await self._tunnel.async_disconnect()
+            await self._tunnel.stop()
+            self._tunnel = None
         await self._luci.async_disconnect()
         await self.async_cast_disconnect()
+
+    @asynccontextmanager
+    async def _tunnel_session(self) -> AsyncIterator[TunnelProtocol | None]:
+        """Provide a connected tunnel, or None if there is none."""
+        if self._tunnel is None:
+            yield None
+            return
+        async with self._tunnel.session() as session:
+            yield session
+
+    async def _async_poll_state(self) -> None:
+        """Read the volatile device state in one short session (shared mode)."""
+        async with self._tunnel_session() as tunnel:
+            if tunnel is None:
+                return
+            resp = await tunnel.async_send(*TCMD_STANDBY_GET)
+            if resp is not None and len(resp) >= 1:
+                self.state.power_on = resp[0] == 1
+            resp = await tunnel.async_send(*TCMD_SOURCE_GET)
+            if resp is not None and len(resp) >= 3:
+                self._parse_source(resp)
+            resp = await tunnel.async_send(*TCMD_VOLUME_GET)
+            if resp is not None and len(resp) >= 1:
+                self._parse_volume(resp)
+            resp = await tunnel.async_send(*TCMD_MUTE_GET)
+            if resp is not None and len(resp) >= 1:
+                self.state.is_muted = resp[0] == 1
+            resp = await tunnel.async_send(*TCMD_EQ_GET)
+            if resp is not None and len(resp) >= 3:
+                self._parse_eq(resp)
+
+        async_dispatcher_send(self.hass, SIGNAL_STATE_UPDATED.format(mac=self.usn))
 
     async def _load_presets(self) -> None:
         """Load preset data from persistent storage."""
@@ -241,58 +321,59 @@ class CantonHub:
         )
 
     async def _fetch_initial_state(self) -> None:
-        """Fetch the initial device state via tunnel."""
-        if not self._tunnel:
-            return
+        """Fetch the full device state, including menu settings, in one session."""
+        async with self._tunnel_session() as tunnel:
+            if tunnel is None:
+                return
 
-        # Query standby state (1=on, 0=standby)
-        resp = await self._tunnel.async_send(*TCMD_STANDBY_GET)
-        if resp is not None and len(resp) >= 1:
-            self.state.power_on = resp[0] == 1
+            # Query standby state (1=on, 0=standby)
+            resp = await tunnel.async_send(*TCMD_STANDBY_GET)
+            if resp is not None and len(resp) >= 1:
+                self.state.power_on = resp[0] == 1
 
-        # Query input mapping (SOURCE_INFO)
-        resp = await self._tunnel.async_send(*TCMD_SOURCE_INFO_GET)
-        if resp is not None and len(resp) >= 3:
-            for i in range(0, len(resp) - 2, 3):
-                src_id, name_id, mode_id = resp[i], resp[i + 1], resp[i + 2]
-                self.state.input_map[name_id] = (src_id, mode_id)
+            # Query input mapping (SOURCE_INFO)
+            resp = await tunnel.async_send(*TCMD_SOURCE_INFO_GET)
+            if resp is not None and len(resp) >= 3:
+                for i in range(0, len(resp) - 2, 3):
+                    src_id, name_id, mode_id = resp[i], resp[i + 1], resp[i + 2]
+                    self.state.input_map[name_id] = (src_id, mode_id)
 
-        # Query presets
-        resp = await self._tunnel.async_send(*TCMD_PRESET_GET)
-        if resp is not None and len(resp) >= 11:
-            self.state.active_preset = resp[0]
-            self.state.configured_presets = [
-                i + 1 for i in range(10) if resp[i + 1] == 2
-            ]
+            # Query presets
+            resp = await tunnel.async_send(*TCMD_PRESET_GET)
+            if resp is not None and len(resp) >= 11:
+                self.state.active_preset = resp[0]
+                self.state.configured_presets = [
+                    i + 1 for i in range(10) if resp[i + 1] == 2
+                ]
 
-        # Query source/playmode
-        resp = await self._tunnel.async_send(*TCMD_SOURCE_GET)
-        if resp is not None and len(resp) >= 3:
-            self._parse_source(resp)
+            # Query source/playmode
+            resp = await tunnel.async_send(*TCMD_SOURCE_GET)
+            if resp is not None and len(resp) >= 3:
+                self._parse_source(resp)
 
-        # Query EQ
-        resp = await self._tunnel.async_send(*TCMD_EQ_GET)
-        if resp is not None and len(resp) >= 3:
-            self._parse_eq(resp)
+            # Query EQ
+            resp = await tunnel.async_send(*TCMD_EQ_GET)
+            if resp is not None and len(resp) >= 3:
+                self._parse_eq(resp)
 
-        # Query volume
-        resp = await self._tunnel.async_send(*TCMD_VOLUME_GET)
-        if resp is not None and len(resp) >= 1:
-            self._parse_volume(resp)
+            # Query volume
+            resp = await tunnel.async_send(*TCMD_VOLUME_GET)
+            if resp is not None and len(resp) >= 1:
+                self._parse_volume(resp)
 
-        # Query mute
-        resp = await self._tunnel.async_send(*TCMD_MUTE_GET)
-        if resp is not None and len(resp) >= 1:
-            self.state.is_muted = resp[0] == 1
+            # Query mute
+            resp = await tunnel.async_send(*TCMD_MUTE_GET)
+            if resp is not None and len(resp) >= 1:
+                self.state.is_muted = resp[0] == 1
 
-        # Query all menu settings supported by this model
-        for name in MENU_IDS_BY_MODEL:
-            menu_id = self.menu_id(name)
-            if menu_id is None:
-                continue
-            val = await self._async_menu_get_by_id(menu_id)
-            if val is not None:
-                self.state.menu_values[menu_id] = val
+            # Query all menu settings supported by this model
+            for name in MENU_IDS_BY_MODEL:
+                menu_id = self.menu_id(name)
+                if menu_id is None:
+                    continue
+                val = await self._async_menu_get_by_id(tunnel, menu_id)
+                if val is not None:
+                    self.state.menu_values[menu_id] = val
 
     def _parse_source(self, payload: bytes) -> None:
         """Parse SOURCE_PLAY_MODE response: [sourceId, nameId, playModeId]."""
@@ -480,18 +561,19 @@ class CantonHub:
     async def _delayed_preset_capture(self, preset: int) -> None:
         """Capture preset state after the device has applied it."""
         await asyncio.sleep(1)
-        if not self._tunnel:
-            return
-        # Re-read current state
-        resp = await self._tunnel.async_send(*TCMD_SOURCE_GET)
-        if resp and len(resp) >= 3:
-            self._parse_source(resp)
-        resp = await self._tunnel.async_send(*TCMD_EQ_GET)
-        if resp and len(resp) >= 3:
-            self._parse_eq(resp)
-        resp = await self._tunnel.async_send(*TCMD_VOLUME_GET)
-        if resp and len(resp) >= 1:
-            self._parse_volume(resp)
+        async with self._tunnel_session() as tunnel:
+            if tunnel is None:
+                return
+            # Re-read current state
+            resp = await tunnel.async_send(*TCMD_SOURCE_GET)
+            if resp and len(resp) >= 3:
+                self._parse_source(resp)
+            resp = await tunnel.async_send(*TCMD_EQ_GET)
+            if resp and len(resp) >= 3:
+                self._parse_eq(resp)
+            resp = await tunnel.async_send(*TCMD_VOLUME_GET)
+            if resp and len(resp) >= 1:
+                self._parse_volume(resp)
 
         self._capture_preset(preset)
         await self._save_presets()
@@ -577,21 +659,26 @@ class CantonHub:
                 await self._luci.async_disconnect()
                 return False
 
-            self._tunnel = TunnelProtocol(
-                self._luci.host, self._tunnel_port, self._luci
+            self._tunnel = TunnelManager(
+                host=self._luci.host,
+                port=self._tunnel_port,
+                luci=self._luci,
+                on_message=self._on_tunnel_message,
+                poll=self._async_poll_state,
+                log_id=self.device_name or self.host,
+                loop=self.hass.loop,
             )
-            self._tunnel.on_message = self._on_tunnel_message
-            self._tunnel.on_connection_change = self._on_connection_change
-
-            if not await self._tunnel.async_connect():
-                return False
+            await self._tunnel.start()
 
             if self._teardown:
-                await self._tunnel.async_disconnect()
+                await self._tunnel.stop()
                 await self._luci.async_disconnect()
                 return False
 
             await self._fetch_initial_state()
+            if not self._tunnel.available:
+                await self._tunnel.stop()
+                return False
             _LOGGER.info("Reconnected to %s", self.host)
             async_dispatcher_send(
                 self.hass, SIGNAL_STATE_UPDATED.format(mac=self.usn)
@@ -599,9 +686,9 @@ class CantonHub:
             return True
         except asyncio.CancelledError:
             # Cleanup on cancellation
-            if self._tunnel and self._tunnel.is_connected:
+            if self._tunnel is not None:
                 try:
-                    await self._tunnel.async_disconnect()
+                    await self._tunnel.stop()
                 except Exception:
                     pass
             if self._luci.is_connected:
@@ -630,13 +717,12 @@ class CantonHub:
             return None
         return self.state.menu_values.get(menu_id)
 
-    async def _async_menu_get_by_id(self, menu_id: int) -> int | None:
-        """Low-level: get a menu value by raw ID (used during initial fetch)."""
-        if not self._tunnel:
-            return None
-        resp = await self._tunnel.async_send(
-            *TCMD_MENU_GET, menu_id.to_bytes(4, "big")
-        )
+    @staticmethod
+    async def _async_menu_get_by_id(
+        tunnel: TunnelProtocol, menu_id: int
+    ) -> int | None:
+        """Low-level: get a menu value by raw ID on an open tunnel session."""
+        resp = await tunnel.async_send(*TCMD_MENU_GET, menu_id.to_bytes(4, "big"))
         if resp and len(resp) >= 5:
             val = resp[4]
             return val if val < 128 else val - 256
@@ -645,20 +731,28 @@ class CantonHub:
     async def async_menu_set(self, name: str, value: int) -> None:
         """Set a menu value by setting name."""
         menu_id = self.menu_id(name)
-        if menu_id is None or not self._tunnel:
+        if menu_id is None:
             return
-        await self._tunnel.async_send_fire(
-            *TCMD_MENU_SET, menu_id.to_bytes(4, "big") + bytes([value & 0xFF])
-        )
-        # Close OSD menu on the device display. The device auto-navigates
-        # into the menu hierarchy when MENU_SET is sent, so one EXIT only
-        # goes up one level — we need to send one EXIT per nesting level
-        # plus one to fully close the OSD. The device needs ~200ms between
-        # OSD commands to process them correctly.
-        exit_count = MENU_EXIT_COUNT.get(name, MENU_EXIT_COUNT_DEFAULT)
-        for _ in range(exit_count):
-            await asyncio.sleep(0.2)
-            await self._tunnel.async_send_fire(*TCMD_MENU_EXIT)
+
+        async with self._tunnel_session() as tunnel:
+            if tunnel is None:
+                return
+            await tunnel.async_send_fire(
+                *TCMD_MENU_SET, menu_id.to_bytes(4, "big") + bytes([value & 0xFF])
+            )
+            # Close OSD menu on the device display. The device auto-navigates
+            # into the menu hierarchy when MENU_SET is sent, so one EXIT only
+            # goes up one level — we need to send one EXIT per nesting level
+            # plus one to fully close the OSD. The device needs ~200ms between
+            # OSD commands to process them correctly.
+            exit_count = MENU_EXIT_COUNT.get(name, MENU_EXIT_COUNT_DEFAULT)
+            for _ in range(exit_count):
+                await asyncio.sleep(0.2)
+                await tunnel.async_send_fire(*TCMD_MENU_EXIT)
+            # Short sessions get no push notification — remember what we set
+            self.state.menu_values[menu_id] = value
+
+        async_dispatcher_send(self.hass, SIGNAL_STATE_UPDATED.format(mac=self.usn))
 
     # --- Command methods ---
 
@@ -674,27 +768,37 @@ class CantonHub:
     async def async_set_volume(self, volume: int) -> None:
         if self._is_network_source():
             await self._luci.async_send_fire(MID_VOLUME, CMD_SET, str(volume))
-        elif self._tunnel:
-            await self._tunnel.async_send_fire(*TCMD_VOLUME_SET, bytes([volume]))
+            self.state.volume = volume
+        else:
+            async with self._tunnel_session() as tunnel:
+                if tunnel is None:
+                    return
+                await tunnel.async_send_fire(*TCMD_VOLUME_SET, bytes([volume]))
+                self.state.volume = volume
+        async_dispatcher_send(self.hass, SIGNAL_STATE_UPDATED.format(mac=self.usn))
 
     async def async_set_mute(self, mute: bool) -> None:
-        if self._tunnel:
-            await self._tunnel.async_send_fire(
-                *TCMD_MUTE_SET, bytes([1 if mute else 0])
-            )
+        async with self._tunnel_session() as tunnel:
+            if tunnel is None:
+                return
+            await tunnel.async_send_fire(*TCMD_MUTE_SET, bytes([1 if mute else 0]))
+            self.state.is_muted = mute
+        async_dispatcher_send(self.hass, SIGNAL_STATE_UPDATED.format(mac=self.usn))
 
     async def async_set_power(self, on: bool) -> None:
-        if self._tunnel:
-            await self._tunnel.async_send_fire(
-                *TCMD_STANDBY_SET, bytes([1 if on else 0])
-            )
+        async with self._tunnel_session() as tunnel:
+            if tunnel is None:
+                return
+            await tunnel.async_send_fire(*TCMD_STANDBY_SET, bytes([1 if on else 0]))
+            self.state.power_on = on
+        async_dispatcher_send(self.hass, SIGNAL_STATE_UPDATED.format(mac=self.usn))
 
     async def async_set_input(self, input_name: str) -> None:
         """Set input by name (e.g., 'CD', 'TV', 'AUX')."""
         from .const import TUNNEL_INPUT_NAMES_REVERSE
 
         name_id = TUNNEL_INPUT_NAMES_REVERSE.get(input_name)
-        if name_id is None or not self._tunnel:
+        if name_id is None:
             return
         mapping = self.state.input_map.get(name_id)
         if mapping:
@@ -704,33 +808,56 @@ class CantonHub:
                 "No source mapping for input %s (nameId=%s)", input_name, name_id
             )
             return
-        await self._tunnel.async_send_fire(
-            *TCMD_SOURCE_SET,
-            bytes([source_id, name_id, self.state.play_mode_id]),
-        )
+
+        async with self._tunnel_session() as tunnel:
+            if tunnel is None:
+                return
+            await tunnel.async_send_fire(
+                *TCMD_SOURCE_SET,
+                bytes([source_id, name_id, self.state.play_mode_id]),
+            )
+            await self._async_read_source(tunnel)
+        async_dispatcher_send(self.hass, SIGNAL_STATE_UPDATED.format(mac=self.usn))
+
+    async def _async_read_source(self, tunnel: TunnelProtocol) -> None:
+        """Re-read source and volume after a change, for sessions without push."""
+        await asyncio.sleep(0.3)
+        resp = await tunnel.async_send(*TCMD_SOURCE_GET)
+        if resp and len(resp) >= 3:
+            self._parse_source(resp)
+        resp = await tunnel.async_send(*TCMD_VOLUME_GET)
+        if resp and len(resp) >= 1:
+            self._parse_volume(resp)
 
     async def async_set_play_mode(self, mode: str) -> None:
         """Set play mode (e.g., 'Stereo', 'Movie', 'Music')."""
         from .const import TUNNEL_PLAY_MODES_REVERSE
 
         mode_id = TUNNEL_PLAY_MODES_REVERSE.get(mode)
-        if mode_id is None or not self._tunnel:
+        if mode_id is None:
             return
-        await self._tunnel.async_send_fire(
-            *TCMD_SOURCE_SET,
-            bytes([self.state.source_id, self.state.input_name_id, mode_id]),
-        )
+        async with self._tunnel_session() as tunnel:
+            if tunnel is None:
+                return
+            await tunnel.async_send_fire(
+                *TCMD_SOURCE_SET,
+                bytes([self.state.source_id, self.state.input_name_id, mode_id]),
+            )
+            await self._async_read_source(tunnel)
+        async_dispatcher_send(self.hass, SIGNAL_STATE_UPDATED.format(mac=self.usn))
 
     async def async_recall_preset(self, preset: int) -> None:
         """Recall a preset by sending the recall command to the device."""
-        if not self._tunnel:
-            return
+        async with self._tunnel_session() as tunnel:
+            if tunnel is None:
+                return
+            await tunnel.async_send_fire(*TCMD_PRESET_RECALL, bytes([preset, 1]))
 
-        await self._tunnel.async_send_fire(*TCMD_PRESET_RECALL, bytes([preset, 1]))
         self.state.active_preset = preset
         async_dispatcher_send(
             self.hass, SIGNAL_STATE_UPDATED.format(mac=self.usn)
         )
+        self.hass.async_create_task(self._delayed_preset_capture(preset))
 
     async def async_set_eq(
         self,
@@ -739,14 +866,27 @@ class CantonHub:
         bass: int | None = None,
     ) -> None:
         """Set EQ values (-10 to +10 dB)."""
-        if not self._tunnel:
-            return
         t = treble if treble is not None else self.state.eq_treble
         m = mid if mid is not None else self.state.eq_mid
         b = bass if bass is not None else self.state.eq_bass
-        await self._tunnel.async_send_fire(
-            *TCMD_EQ_SET, bytes([t & 0xFF, m & 0xFF, b & 0xFF, self.state.eq_range])
-        )
+
+        async with self._tunnel_session() as tunnel:
+            if tunnel is None:
+                return
+            await tunnel.async_send_fire(
+                *TCMD_EQ_SET,
+                bytes([t & 0xFF, m & 0xFF, b & 0xFF, self.state.eq_range]),
+            )
+            self.state.eq_treble, self.state.eq_mid, self.state.eq_bass = t, m, b
+        async_dispatcher_send(self.hass, SIGNAL_STATE_UPDATED.format(mac=self.usn))
+
+    async def async_bluetooth_pair(self) -> None:
+        """Put the device into Bluetooth pairing mode."""
+        from .const import TCMD_BT_PAIR
+
+        async with self._tunnel_session() as tunnel:
+            if tunnel is not None:
+                await tunnel.async_send_fire(*TCMD_BT_PAIR)
 
     # --- Chromecast (built-in) ---
 

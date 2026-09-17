@@ -29,8 +29,6 @@ from .const import (
     PLAY_STATUS_STOPPED,
     SIGNAL_STATE_UPDATED,
     SOURCE_MODE_PRESETS,
-    TUNNEL_INPUT_NAMES,
-    TUNNEL_INPUT_NAMES_REVERSE,
 )
 from .entity import CantonEntity
 
@@ -109,7 +107,7 @@ class CantonMediaPlayer(CantonEntity, MediaPlayerEntity):
             return [
                 f"Preset {i}" for i in self._hub.state.configured_presets
             ] if self._hub.state.configured_presets else []
-        return list(TUNNEL_INPUT_NAMES.values())
+        return self._hub.input_list
 
     @property
     def media_content_type(self) -> MediaType | None:

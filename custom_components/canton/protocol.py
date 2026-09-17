@@ -25,7 +25,6 @@ from .const import (
     MID_DEVICE_NAME,
     MID_GET_UI,
     MID_REGISTER,
-    RECONNECT_DELAYS,
     SOURCE_CAPABILITY_BITS,
     SOURCE_MAP,
     TCMD_VOLUME_GET,
@@ -130,7 +129,6 @@ class ConnectionState(Enum):
     DISCONNECTED = "disconnected"
     CONNECTING = "connecting"
     CONNECTED = "connected"
-    RECONNECTING = "reconnecting"
 
 
 class LuciProtocol:
@@ -144,7 +142,6 @@ class LuciProtocol:
         self._writer: asyncio.StreamWriter | None = None
         self._read_task: asyncio.Task | None = None
         self._keepalive_task: asyncio.Task | None = None
-        self._reconnect_task: asyncio.Task | None = None
         self._closing = False
         self._pending_responses: dict[int, asyncio.Future[LuciMessage]] = {}
         self.on_message: Callable[[LuciMessage], None] | None = None
@@ -232,7 +229,6 @@ class LuciProtocol:
         into a stuck state where it ignores all commands until power-cycled.
         """
         self._closing = True
-        self._cancel_reconnect()
         await self._close_connection()
 
     async def async_send(
@@ -256,7 +252,7 @@ class LuciProtocol:
             await self._writer.drain()
         except OSError as err:
             _LOGGER.debug("Send failed: %s", err)
-            await self._trigger_reconnect()
+            await self._handle_connection_lost()
 
     async def _async_send_and_wait(self, msg: LuciMessage) -> LuciMessage | None:
         """Send a message and wait for the matching response."""
@@ -313,7 +309,7 @@ class LuciProtocol:
                 break
 
         if not self._closing:
-            await self._trigger_reconnect()
+            await self._handle_connection_lost()
 
     def _dispatch_message(self, msg: LuciMessage) -> None:
         """Dispatch a received message to pending futures or callback."""
@@ -336,54 +332,24 @@ class LuciProtocol:
                 break
             response = await self.async_send(MID_GET_UI, CMD_GET)
             if response is None and not self._closing:
-                _LOGGER.debug("Keepalive failed, triggering reconnect")
-                await self._trigger_reconnect()
+                _LOGGER.debug("Keepalive failed, reporting connection loss")
+                await self._handle_connection_lost()
                 return
 
-    async def _trigger_reconnect(self) -> None:
-        """Close current connection and start reconnecting."""
+    async def _handle_connection_lost(self) -> None:
+        """Close the connection and report the loss.
+
+        Reconnecting is handled by CantonHub, which also has to rebuild the tunnel
+        and re-read the device state afterwards.
+        """
         if self._closing:
             return
 
         was_connected = self._state == ConnectionState.CONNECTED
         await self._close_connection()
-        self._state = ConnectionState.RECONNECTING
 
         if was_connected and self.on_connection_change:
             self.on_connection_change(False)
-
-        if not self._reconnect_task or self._reconnect_task.done():
-            self._reconnect_task = asyncio.ensure_future(self._reconnect_loop())
-
-    async def _reconnect_loop(self) -> None:
-        """Attempt to reconnect with exponential backoff."""
-        for delay in RECONNECT_DELAYS:
-            if self._closing:
-                return
-            _LOGGER.debug("Reconnecting to %s in %s seconds", self._host, delay)
-            await asyncio.sleep(delay)
-            if self._closing:
-                return
-            if await self.async_connect():
-                return
-
-        while not self._closing:
-            _LOGGER.debug(
-                "Reconnecting to %s in %s seconds",
-                self._host,
-                RECONNECT_DELAYS[-1],
-            )
-            await asyncio.sleep(RECONNECT_DELAYS[-1])
-            if self._closing:
-                return
-            if await self.async_connect():
-                return
-
-    def _cancel_reconnect(self) -> None:
-        """Cancel any pending reconnect."""
-        if self._reconnect_task and not self._reconnect_task.done():
-            self._reconnect_task.cancel()
-            self._reconnect_task = None
 
     async def _close_connection(self) -> None:
         """Close the TCP connection and cancel tasks."""
@@ -444,17 +410,19 @@ class TunnelProtocol:
             len(payload) & 0xFF,
         ]) + payload
 
-    async def async_connect(self) -> bool:
-        """Connect to the tunnel port (requires LUCI to be connected first)."""
+    async def async_connect(self, keepalive: bool = True) -> bool:
+        """Connect to the tunnel port.
+
+        The tunnel port stays open on the device, so MID_TUNNELING_START is only
+        sent if the plain connect fails. Sending it unconditionally would tear
+        down a tunnel session another controller (Canton app, Unfolded Circle
+        Remote) is using, because the device only accepts a single tunnel
+        connection at a time.
+
+        Args:
+            keepalive: Run the keepalive loop. Disable for short-lived sessions.
+        """
         self._closing = False
-
-        # Start tunnel via LUCI
-        from .const import MID_TUNNELING_START
-
-        await self._luci.async_send_fire(
-            MID_TUNNELING_START, CMD_SET, str(self._tunnel_port)
-        )
-        await asyncio.sleep(0.5)
 
         try:
             self._reader, self._writer = await asyncio.wait_for(
@@ -462,18 +430,54 @@ class TunnelProtocol:
                 timeout=COMMAND_TIMEOUT,
             )
         except (OSError, asyncio.TimeoutError) as err:
-            _LOGGER.debug("Tunnel connect to %s:%s failed: %s", self._host, self._tunnel_port, err)
-            return False
+            _LOGGER.debug(
+                "Tunnel connect to %s:%s failed (%s), requesting tunnel start",
+                self._host,
+                self._tunnel_port,
+                err,
+            )
+            if not await self._async_request_tunnel_start():
+                return False
+            try:
+                self._reader, self._writer = await asyncio.wait_for(
+                    asyncio.open_connection(self._host, self._tunnel_port),
+                    timeout=COMMAND_TIMEOUT,
+                )
+            except (OSError, asyncio.TimeoutError) as err2:
+                _LOGGER.debug(
+                    "Tunnel connect to %s:%s failed after start: %s",
+                    self._host,
+                    self._tunnel_port,
+                    err2,
+                )
+                return False
 
         _set_socket_options(self._writer)
 
         self._connected = True
         self._read_task = asyncio.ensure_future(self._read_loop())
-        self._keepalive_task = asyncio.ensure_future(self._keepalive_loop())
+        if keepalive:
+            self._keepalive_task = asyncio.ensure_future(self._keepalive_loop())
         _LOGGER.debug("Tunnel connected to %s:%s", self._host, self._tunnel_port)
 
         if self.on_connection_change:
             self.on_connection_change(True)
+        return True
+
+    async def _async_request_tunnel_start(self) -> bool:
+        """Ask the device to open the tunnel port via LUCI.
+
+        Only used as a fallback — this also drops any tunnel session another
+        controller currently holds.
+        """
+        from .const import MID_TUNNELING_START
+
+        if not self._luci.is_connected:
+            return False
+        await self._luci.async_send_fire(
+            MID_TUNNELING_START, CMD_SET, str(self._tunnel_port)
+        )
+        await asyncio.sleep(0.5)
         return True
 
     async def async_disconnect(self) -> None:

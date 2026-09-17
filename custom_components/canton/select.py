@@ -29,7 +29,6 @@ from .const import (
     SLEEP_TIMER_REVERSE,
     STANDBY_MODE_OPTIONS,
     STANDBY_MODE_REVERSE,
-    TUNNEL_INPUT_NAMES,
     TUNNEL_PLAY_MODES,
 )
 from .entity import CantonEntity
@@ -80,7 +79,11 @@ class CantonInputSelect(CantonEntity, SelectEntity):
     def __init__(self, hub: CantonHub) -> None:
         super().__init__(hub)
         self._attr_unique_id = f"{hub.usn}_input"
-        self._attr_options = list(TUNNEL_INPUT_NAMES.values())
+
+    @property
+    def options(self) -> list[str]:
+        """Return the inputs as named on the device."""
+        return self._hub.input_list
 
     @property
     def current_option(self) -> str | None:

@@ -32,7 +32,4 @@ class CantonBluetoothPairButton(CantonEntity, ButtonEntity):
         self._attr_unique_id = f"{hub.usn}_bt_pair"
 
     async def async_press(self) -> None:
-        from .const import TCMD_BT_PAIR
-
-        if self._hub._tunnel:
-            await self._hub._tunnel.async_send_fire(*TCMD_BT_PAIR)
+        await self._hub.async_bluetooth_pair()
