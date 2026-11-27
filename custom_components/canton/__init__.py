@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -15,6 +16,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 
 from .const import (
+    CLOSE_TIMEOUT,
     CMD_GET,
     CMD_SET,
     CONF_FW_VERSION,
@@ -30,6 +32,7 @@ from .const import (
     MID_TUNNELING_START,
     MID_VOLUME,
     PLATFORMS,
+    RECONNECT_DELAYS,
     SIGNAL_CONNECTION_CHANGED,
     SIGNAL_STATE_UPDATED,
     TCMD_EQ_GET,
@@ -163,6 +166,9 @@ class CantonHub:
         self.wifi_band = wifi_band
         self.state = CantonState()
         self._teardown = False
+        # Availability is reported (and logged on change) once setup has finished
+        self._setup_done = False
+        self._available = True
         self._reconnect_task: asyncio.Task | None = None
         self._cast = None  # Lazy-initialized pychromecast device
         self._store = Store[dict[str, Any]](
@@ -225,8 +231,51 @@ class CantonHub:
                 f"Cannot connect to Canton device at {self._luci.host}"
             )
 
-        # Tunnel access is managed adaptively: held permanently while free, shared
-        # through short sessions when another controller uses it.
+        await self._async_start_tunnel()
+
+        # Load stored presets
+        await self._load_presets()
+
+        await self._fetch_initial_state()
+
+        if not self._tunnel.available:
+            await self.async_teardown()
+            raise ConfigEntryNotReady(
+                f"Cannot reach Canton tunnel at {self._luci.host}:{self._tunnel_port}"
+            )
+        self._setup_done = True
+        self._update_availability()
+
+        # Capture current state for the active preset
+        if self.state.active_preset > 0:
+            self._capture_preset(self.state.active_preset)
+            await self._save_presets()
+
+    async def async_teardown(self) -> None:
+        """Disconnect from the device.
+
+        Never raises: an exception here would leave the config entry in a state
+        that only a Home Assistant restart can recover from.
+        """
+        self._teardown = True
+        for step in (
+            self._async_cancel_reconnect,
+            self._async_stop_tunnel,
+            self._luci.async_disconnect,
+            self.async_cast_disconnect,
+        ):
+            try:
+                await step()
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Error while disconnecting from %s", self.host)
+
+    async def _async_start_tunnel(self) -> None:
+        """Create the tunnel manager and take or share the tunnel.
+
+        Tunnel access is managed adaptively: held permanently while free, shared
+        through short sessions when another controller uses it.
+        """
+        await self._async_stop_tunnel()
         self._tunnel = TunnelManager(
             host=self._luci.host,
             port=self._tunnel_port,
@@ -235,35 +284,15 @@ class CantonHub:
             poll=self._async_poll_state,
             log_id=self.device_name or self.host,
             loop=self.hass.loop,
+            on_available_change=self._on_tunnel_available_change,
         )
         await self._tunnel.start()
 
-        # Load stored presets
-        await self._load_presets()
-
-        await self._fetch_initial_state()
-
-        if not self._tunnel.available:
-            await self._tunnel.stop()
-            await self._luci.async_disconnect()
-            raise ConfigEntryNotReady(
-                f"Cannot reach Canton tunnel at {self._luci.host}:{self._tunnel_port}"
-            )
-
-        # Capture current state for the active preset
-        if self.state.active_preset > 0:
-            self._capture_preset(self.state.active_preset)
-            await self._save_presets()
-
-    async def async_teardown(self) -> None:
-        """Disconnect from the device."""
-        self._teardown = True
-        await self._async_cancel_reconnect()
-        if self._tunnel:
-            await self._tunnel.stop()
-            self._tunnel = None
-        await self._luci.async_disconnect()
-        await self.async_cast_disconnect()
+    async def _async_stop_tunnel(self) -> None:
+        """Stop the tunnel manager, including its polling and retry tasks."""
+        tunnel, self._tunnel = self._tunnel, None
+        if tunnel is not None:
+            await tunnel.stop()
 
     @asynccontextmanager
     async def _tunnel_session(self) -> AsyncIterator[TunnelProtocol | None]:
@@ -591,20 +620,37 @@ class CantonHub:
         )
 
     def _on_connection_change(self, connected: bool) -> None:
-        """Handle connection state changes (may be called from any thread)."""
+        """Handle LUCI connection state changes (may be called from any thread)."""
         self.hass.loop.call_soon_threadsafe(
             self._handle_connection_change_in_loop, connected
         )
 
     @callback
     def _handle_connection_change_in_loop(self, connected: bool) -> None:
-        async_dispatcher_send(
-            self.hass,
-            SIGNAL_CONNECTION_CHANGED.format(mac=self.usn),
-            connected,
-        )
+        self._update_availability()
         if not connected and not self._teardown:
             self._schedule_reconnect()
+
+    @callback
+    def _on_tunnel_available_change(self, available: bool) -> None:
+        """Handle the tunnel becoming reachable or unreachable."""
+        self._update_availability()
+
+    @callback
+    def _update_availability(self) -> None:
+        """Push the current availability to the entities, log changes once."""
+        if self._teardown or not self._setup_done:
+            return
+        available = self.is_connected
+        if available != self._available:
+            self._available = available
+            if available:
+                _LOGGER.info("%s (%s) is available again", self.device_name, self.host)
+            else:
+                _LOGGER.info("%s (%s) is unavailable", self.device_name, self.host)
+        async_dispatcher_send(
+            self.hass, SIGNAL_CONNECTION_CHANGED.format(mac=self.usn), available
+        )
 
     def _schedule_reconnect(self) -> None:
         """Schedule an automatic reconnect attempt."""
@@ -614,40 +660,26 @@ class CantonHub:
             self._auto_reconnect()
         )
 
-    def _cancel_reconnect(self) -> None:
-        """Cancel any pending reconnect (fire and forget)."""
-        if self._reconnect_task and not self._reconnect_task.done():
-            self._reconnect_task.cancel()
-            self._reconnect_task = None
-
     async def _async_cancel_reconnect(self) -> None:
         """Cancel any pending reconnect and wait for it to finish."""
-        task = self._reconnect_task
-        self._reconnect_task = None
+        task, self._reconnect_task = self._reconnect_task, None
         if task and not task.done():
             task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+            await asyncio.wait({task}, timeout=CLOSE_TIMEOUT)
 
     async def _auto_reconnect(self) -> None:
-        """Automatically reconnect with backoff."""
-        delays = [10, 30, 60]
-        for delay in delays:
-            if self._teardown:
-                return
-            _LOGGER.debug("Auto-reconnect to %s in %s seconds", self.host, delay)
-            await asyncio.sleep(delay)
-            if self._teardown:
-                return
-            if await self._try_reconnect():
-                return
+        """Reconnect LUCI and tunnel with backoff until it succeeds."""
+        # The tunnel depends on LUCI (tunnel start fallback) — stop polling and
+        # retrying it until the device is back.
+        await self._async_stop_tunnel()
+        self._update_availability()
 
-        # Keep trying at max interval
+        attempt = 0
         while not self._teardown:
-            _LOGGER.debug("Auto-reconnect to %s in 60 seconds", self.host)
-            await asyncio.sleep(60)
+            delay = RECONNECT_DELAYS[min(attempt, len(RECONNECT_DELAYS) - 1)]
+            attempt += 1
+            _LOGGER.debug("Reconnecting to %s in %s seconds", self.host, delay)
+            await asyncio.sleep(delay)
             if self._teardown:
                 return
             if await self._try_reconnect():
@@ -656,58 +688,27 @@ class CantonHub:
     async def _try_reconnect(self) -> bool:
         """Attempt a single reconnect cycle."""
         try:
-            if self._teardown:
+            if not self._luci.is_connected and not await self._luci.async_connect():
                 return False
 
-            if not self._luci.is_connected:
-                if not await self._luci.async_connect():
-                    return False
-
-            if self._teardown:
-                await self._luci.async_disconnect()
-                return False
-
-            self._tunnel = TunnelManager(
-                host=self._luci.host,
-                port=self._tunnel_port,
-                luci=self._luci,
-                on_message=self._on_tunnel_message,
-                poll=self._async_poll_state,
-                log_id=self.device_name or self.host,
-                loop=self.hass.loop,
-            )
-            await self._tunnel.start()
-
-            if self._teardown:
-                await self._tunnel.stop()
-                await self._luci.async_disconnect()
-                return False
-
+            await self._async_start_tunnel()
             await self._fetch_initial_state()
-            if not self._tunnel.available:
-                await self._tunnel.stop()
+            if (
+                self._tunnel is None
+                or not self._tunnel.available
+                or not self._luci.is_connected
+            ):
+                await self._async_stop_tunnel()
+                self._update_availability()
                 return False
-            _LOGGER.info("Reconnected to %s", self.host)
-            async_dispatcher_send(
-                self.hass, SIGNAL_STATE_UPDATED.format(mac=self.usn)
-            )
-            return True
-        except asyncio.CancelledError:
-            # Cleanup on cancellation
-            if self._tunnel is not None:
-                try:
-                    await self._tunnel.stop()
-                except Exception:
-                    pass
-            if self._luci.is_connected:
-                try:
-                    await self._luci.async_disconnect()
-                except Exception:
-                    pass
-            raise
-        except Exception:
+        except Exception:  # noqa: BLE001
             _LOGGER.debug("Reconnect attempt to %s failed", self.host, exc_info=True)
+            await self._async_stop_tunnel()
             return False
+
+        self._update_availability()
+        async_dispatcher_send(self.hass, SIGNAL_STATE_UPDATED.format(mac=self.usn))
+        return True
 
     # --- Menu methods ---
 
@@ -971,11 +972,14 @@ class CantonHub:
         """Disconnect the chromecast (called on teardown)."""
         if self._cast is None:
             return
+        cast, self._cast = self._cast, None
         try:
-            await self.hass.async_add_executor_job(self._cast.disconnect)
-        except Exception:
+            # Without a timeout pychromecast waits forever for its socket thread
+            await self.hass.async_add_executor_job(
+                functools.partial(cast.disconnect, timeout=CLOSE_TIMEOUT)
+            )
+        except Exception:  # noqa: BLE001
             pass
-        self._cast = None
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: CantonConfigEntry) -> bool:

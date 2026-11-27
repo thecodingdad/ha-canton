@@ -23,9 +23,10 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from enum import StrEnum
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import AsyncIterator, Awaitable, Callable
 
 from .const import (
+    CLOSE_TIMEOUT,
     EXCLUSIVE_STABLE_SECONDS,
     SHARED_MODE_BACKOFF,
     SHARED_POLL_INTERVAL,
@@ -57,6 +58,7 @@ class TunnelManager:
         poll: Callable[[], Awaitable[None]],
         log_id: str,
         loop: asyncio.AbstractEventLoop | None = None,
+        on_available_change: Callable[[bool], None] | None = None,
     ) -> None:
         """
         Create the manager.
@@ -68,6 +70,8 @@ class TunnelManager:
         :param poll: Coroutine reading the device state, called in shared mode
         :param log_id: Identifier used in log messages
         :param loop: Event loop
+        :param on_available_change: Called when the tunnel becomes reachable or
+            unreachable (not called by stop)
         """
         self._host = host
         self._port = port
@@ -76,6 +80,7 @@ class TunnelManager:
         self._poll = poll
         self._log_id = log_id
         self._loop = loop or asyncio.get_event_loop()
+        self._on_available_change = on_available_change
 
         self._mode = TunnelMode.EXCLUSIVE
         self._tunnel: TunnelProtocol | None = None
@@ -83,6 +88,7 @@ class TunnelManager:
         self._available = False
         self._poll_task: asyncio.Task | None = None
         self._mode_task: asyncio.Task | None = None
+        self._switch_task: asyncio.Task | None = None
         self._shared_level = 0
         self._exclusive_since = 0.0
         self._stopped = False
@@ -107,16 +113,17 @@ class TunnelManager:
     async def stop(self) -> None:
         """Release the tunnel and stop all background tasks."""
         self._stopped = True
-        await self._cancel(self._poll_task)
-        await self._cancel(self._mode_task)
-        self._poll_task = None
+        self._available = False
+        for task in (self._switch_task, self._mode_task, self._poll_task):
+            await self._cancel(task)
+        self._switch_task = None
         self._mode_task = None
+        self._poll_task = None
 
         if self._tunnel:
             self._tunnel.on_connection_change = None
-            await self._tunnel.async_disconnect()
-            self._tunnel = None
-        self._available = False
+            tunnel, self._tunnel = self._tunnel, None
+            await tunnel.async_disconnect()
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[TunnelProtocol | None]:
@@ -127,6 +134,10 @@ class TunnelManager:
         shared mode, or None if the tunnel cannot be reached.
         """
         async with self._lock:
+            if self._stopped:
+                yield None
+                return
+
             if self._tunnel and self._tunnel.is_connected:
                 yield self._tunnel
                 return
@@ -135,18 +146,26 @@ class TunnelManager:
             # No connection callback: closing this session is expected, not a takeover
             session.on_message = self._on_message
             if not await session.async_connect(keepalive=False):
-                self._available = False
                 _LOG.debug("[%s] Tunnel session failed", self._log_id)
+                self._set_available(False)
                 yield None
                 return
 
-            self._available = True
+            self._set_available(True)
             try:
                 yield session
             finally:
                 await session.async_disconnect()
 
     # --- internals -----------------------------------------------------------
+
+    def _set_available(self, available: bool) -> None:
+        """Track tunnel reachability and report changes."""
+        if available == self._available or self._stopped:
+            return
+        self._available = available
+        if self._on_available_change:
+            self._on_available_change(available)
 
     async def _open_persistent(self) -> bool:
         """Open the permanent connection used in exclusive mode."""
@@ -158,19 +177,23 @@ class TunnelManager:
             return False
 
         self._tunnel = tunnel
-        self._available = True
         self._mode = TunnelMode.EXCLUSIVE
         self._exclusive_since = self._loop.time()
+        self._set_available(True)
         _LOG.debug("[%s] Holding tunnel exclusively", self._log_id)
         return True
 
     def _on_tunnel_connection_change(self, connected: bool) -> None:
-        """React to the permanent connection being taken over by someone else."""
+        """React to the permanent connection being lost or taken over."""
         if connected or self._stopped:
             return
-        self._loop.call_soon_threadsafe(
-            lambda: self._loop.create_task(self._switch_to_shared())
-        )
+        self._loop.call_soon_threadsafe(self._schedule_switch_to_shared)
+
+    def _schedule_switch_to_shared(self) -> None:
+        """Start the switch to shared mode, keeping a reference to the task."""
+        if self._stopped or (self._switch_task and not self._switch_task.done()):
+            return
+        self._switch_task = self._loop.create_task(self._switch_to_shared())
 
     async def _switch_to_shared(self) -> None:
         """Give up the permanent connection and poll through short sessions."""
@@ -192,16 +215,21 @@ class TunnelManager:
         self._mode = TunnelMode.SHARED
         if self._tunnel:
             self._tunnel.on_connection_change = None
-            await self._tunnel.async_disconnect()
-            self._tunnel = None
+            tunnel, self._tunnel = self._tunnel, None
+            await tunnel.async_disconnect()
+
+        # May be the running task itself when called from _retry_exclusive
+        await self._cancel(self._mode_task)
+        if self._stopped:
+            return
 
         delay = SHARED_MODE_BACKOFF[
             min(self._shared_level, len(SHARED_MODE_BACKOFF) - 1)
         ]
         self._shared_level += 1
         _LOG.info(
-            "[%s] Tunnel is used by another controller — sharing it "
-            "(polling every %ss, retrying exclusive access in %ss)",
+            "[%s] Tunnel connection lost or taken over by another controller — "
+            "sharing it (polling every %ss, retrying exclusive access in %ss)",
             self._log_id,
             SHARED_POLL_INTERVAL,
             delay,
@@ -209,7 +237,6 @@ class TunnelManager:
 
         if self._poll_task is None or self._poll_task.done():
             self._poll_task = self._loop.create_task(self._poll_loop())
-        await self._cancel(self._mode_task)
         self._mode_task = self._loop.create_task(self._retry_exclusive(delay))
 
     async def _retry_exclusive(self, delay: float) -> None:
@@ -242,11 +269,13 @@ class TunnelManager:
                 _LOG.exception("[%s] State poll failed", self._log_id)
 
     @staticmethod
-    async def _cancel(task: Any) -> None:
-        """Cancel and await a task, ignoring cancellation."""
-        if task and not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+    async def _cancel(task: asyncio.Task | None) -> None:
+        """Cancel a task and give it a bounded time to finish.
+
+        The running task is skipped — awaiting itself would swallow the
+        cancellation. Waiting is bounded so a stuck task cannot block an unload.
+        """
+        if task is None or task.done() or task is asyncio.current_task():
+            return
+        task.cancel()
+        await asyncio.wait({task}, timeout=CLOSE_TIMEOUT)

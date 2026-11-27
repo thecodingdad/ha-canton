@@ -23,6 +23,9 @@ KEEPALIVE_INTERVAL = 30
 RECONNECT_DELAYS = [5, 10, 30, 60]
 COMMAND_TIMEOUT = 5
 DISCOVERY_TIMEOUT = 5
+# Upper bound for closing a socket or stopping a background task. A peer that is
+# gone must never block an unload.
+CLOSE_TIMEOUT = 2
 
 # Tunnel sharing
 # The device accepts only ONE tunnel connection at a time — a second controller

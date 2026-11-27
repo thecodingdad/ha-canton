@@ -11,6 +11,7 @@ from enum import Enum
 from typing import Any, Callable
 
 from .const import (
+    CLOSE_TIMEOUT,
     CMD_GET,
     CMD_SET,
     COMMAND_TIMEOUT,
@@ -63,6 +64,38 @@ def _set_socket_options(writer: asyncio.StreamWriter) -> None:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     except OSError:
+        pass
+
+
+def _cancel_tasks(*tasks: asyncio.Task | None) -> None:
+    """Cancel background tasks, except the one that is currently running.
+
+    The read and keepalive loops tear the connection down themselves when they
+    detect a loss. Cancelling the running task would abort that teardown at its
+    next await and leave the protocol half-closed.
+    """
+    current = asyncio.current_task()
+    for task in tasks:
+        if task is not None and task is not current and not task.done():
+            task.cancel()
+
+
+def _fail_pending(pending: dict[int, asyncio.Future[Any]]) -> None:
+    """Wake up everyone waiting for a response on a connection that is gone."""
+    for future in pending.values():
+        if not future.done():
+            future.set_exception(ConnectionResetError("Connection closed"))
+    pending.clear()
+
+
+async def _async_close_writer(writer: asyncio.StreamWriter | None) -> None:
+    """Close a stream without waiting forever for a peer that is gone."""
+    if writer is None:
+        return
+    writer.close()
+    try:
+        await asyncio.wait_for(writer.wait_closed(), timeout=CLOSE_TIMEOUT)
+    except (OSError, asyncio.TimeoutError):
         pass
 
 
@@ -352,28 +385,21 @@ class LuciProtocol:
             self.on_connection_change(False)
 
     async def _close_connection(self) -> None:
-        """Close the TCP connection and cancel tasks."""
-        for task in (self._read_task, self._keepalive_task):
-            if task and not task.done():
-                task.cancel()
+        """Close the TCP connection and cancel tasks.
+
+        All state is reset before the first await, so the protocol can never be
+        left half-closed — not even if closing the socket gets interrupted.
+        """
+        _cancel_tasks(self._read_task, self._keepalive_task)
         self._read_task = None
         self._keepalive_task = None
 
-        if self._writer:
-            try:
-                self._writer.close()
-                await self._writer.wait_closed()
-            except OSError:
-                pass
-            self._writer = None
+        writer, self._writer = self._writer, None
         self._reader = None
-
-        for future in self._pending_responses.values():
-            if not future.done():
-                future.cancel()
-        self._pending_responses.clear()
-
         self._state = ConnectionState.DISCONNECTED
+        _fail_pending(self._pending_responses)
+
+        await _async_close_writer(writer)
 
 
 class TunnelProtocol:
@@ -483,30 +509,20 @@ class TunnelProtocol:
     async def async_disconnect(self) -> None:
         """Disconnect the tunnel."""
         self._closing = True
-        for task in (self._read_task, self._keepalive_task):
-            if task and not task.done():
-                task.cancel()
+        _cancel_tasks(self._read_task, self._keepalive_task)
         self._read_task = None
         self._keepalive_task = None
 
-        if self._writer:
-            try:
-                self._writer.close()
-                await self._writer.wait_closed()
-            except OSError:
-                pass
-            self._writer = None
+        writer, self._writer = self._writer, None
         self._reader = None
-
-        for future in self._pending.values():
-            if not future.done():
-                future.cancel()
-        self._pending.clear()
+        _fail_pending(self._pending)
 
         was_connected = self._connected
         self._connected = False
         if was_connected and self.on_connection_change:
             self.on_connection_change(False)
+
+        await _async_close_writer(writer)
 
     async def async_send(
         self, cmd0: int, cmd1: int, payload: bytes = b""
